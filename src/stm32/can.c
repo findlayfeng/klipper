@@ -224,6 +224,21 @@ CAN_IRQHandler(void)
     uint32_t msr = SOC_CAN->MSR;
     if (msr & CAN_MSR_ERRI) {
         uint32_t esr = SOC_CAN->ESR;
+        if (esr &  CAN_ESR_BOFF_Msk) {
+            CAN_TxMailBox_TypeDef *mb = SOC_CAN->sTxMailBox;
+
+            uint32_t tir = mb->TIR;
+
+            if ((tir & CAN_TI0R_IDE_Msk) != CAN_TI0R_IDE &&
+                (((tir & CAN_TI0R_STID_Msk) >> CAN_TI0R_STID_Pos) ==
+                 CANBUS_ID_ADMIN)) {
+                    SOC_CAN->TSR = CAN_TSR_ABRQ0;
+                    SOC_CAN->MSR = CAN_MSR_ERRI;
+
+                    return;
+            }
+        }
+
         uint32_t lec = (esr & CAN_ESR_LEC_Msk) >> CAN_ESR_LEC_Pos;
         if (lec && lec != 7) {
             SOC_CAN->ESR = 7 << CAN_ESR_LEC_Pos;
@@ -328,6 +343,7 @@ can_init(void)
         armcm_enable_irq(CAN_IRQHandler, CAN_TX_IRQn, 0);
     if (CAN_RX0_IRQn != CAN_SCE_IRQn)
         armcm_enable_irq(CAN_IRQHandler, CAN_SCE_IRQn, 0);
-    SOC_CAN->IER = CAN_IER_FMPIE0 | CAN_IER_ERRIE | CAN_IER_LECIE;
+    SOC_CAN->IER = CAN_IER_FMPIE0 | CAN_IER_ERRIE | CAN_IER_LECIE
+        | CAN_IER_BOFIE;
 }
 DECL_INIT(can_init);
