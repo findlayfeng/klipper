@@ -1,0 +1,44 @@
+# Kconfig settings for compiling klipper as a host static library
+#
+# Copyright (C) 2026  Feng Cheng <i@pfeng.top>
+#
+# This file may be distributed under the terms of the GNU GPLv3 license.
+#
+# This configuration compiles only the core klipper firmware (scheduler,
+# command parsing, console I/O) for the host processor as a static
+# library with thread-safe I/O. It does NOT enable any peripherals
+# (GPIO/SPI/I2C/ADC/PWM/sensors) - those are not implemented on host.
+
+if MACH_HOST
+
+config BOARD_DIRECTORY
+    string
+    default "host"
+
+config HOST_SELECT
+    bool
+    default y
+
+config HOST_LIBRARY_NAME
+    string "Static library name"
+    default "klipper_host"
+    help
+        Name of the generated static library (without lib/ .a prefix)
+
+config HOST_AR_LIBRARY
+    bool "Build as AR static library (.a)"
+    default y
+    help
+        Build the firmware as a static archive (.a) that can be
+        linked into other applications.
+        
+        If disabled, builds a shared library (.so) instead.
+
+config SERIAL
+    default y
+
+config CLOCK_FREQ
+    int
+    default 20000000
+
+endif
