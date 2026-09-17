@@ -4,3 +4,5 @@ out
 .config
 .config.old
 klippy/.version
+src/host/example/klipper_host_example
+src/host/example/klipper_host_burst

@@ -63,6 +63,9 @@ void
 klipper_host_shutdown(void)
 {
     g_shutdown_requested = 1;
+    // Release anyone blocked in klipper_host_output_wait(), so a host reading in
+    // a loop notices the shutdown immediately instead of after its timeout.
+    klipper_console_wake();
     if (g_klipper_thread_active)
         pthread_kill(g_klipper_thread, SIGUSR1);
 }

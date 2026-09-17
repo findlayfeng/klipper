@@ -38,9 +38,17 @@ int klipper_host_init(void);
  * The data is copied into an internal buffer and processed
  * by the klipper task loop.
  *
+ * The call is all-or-nothing: if the internal buffer has no room for
+ * all of `len` bytes, it waits up to 250ms for the klipper task loop to
+ * consume what is already buffered, and returns 0 if it still does not
+ * fit. A partial copy is never made, because half a message block in
+ * the stream would desynchronise the parser. A single call must fit in
+ * the buffer (4096 bytes).
+ *
  * @param data  pointer to input bytes (klipper binary protocol)
  * @param len   number of bytes in data
- * @return      number of bytes consumed (always len on success)
+ * @return      len when the data was accepted, 0 when none of it was
+ *              (the caller may retry the same block)
  */
 ssize_t klipper_host_input(const uint8_t *data, size_t len);
 
@@ -49,11 +57,34 @@ ssize_t klipper_host_input(const uint8_t *data, size_t len);
  * Thread-safe: can be called from any thread at any time.
  * Returns available output bytes encoded in klipper message format.
  *
+ * Equivalent to klipper_host_output_wait() with a timeout of 0.
+ *
  * @param buf       output buffer to fill
  * @param buf_size  size of output buffer
  * @return          number of bytes written to buf, 0 if no data available
  */
 size_t klipper_host_output(uint8_t *buf, size_t buf_size);
+
+/**
+ * Retrieve output data, waiting for it to arrive.
+ * Thread-safe: can be called from any thread at any time.
+ *
+ * Blocks until at least one byte is available, the timeout expires, or
+ * klipper_host_shutdown() is called. This is the call to use from a
+ * dedicated reader thread, instead of polling klipper_host_output().
+ *
+ * Note that output is produced from inside the klipper task loop, so a
+ * program that never drains it will eventually stall klipper once its
+ * transmit buffer (4096 bytes) is full - the same way a real MCU stalls
+ * while the host is not reading.
+ *
+ * @param buf         output buffer to fill
+ * @param buf_size    size of output buffer
+ * @param timeout_ms  how long to wait for data; 0 returns immediately
+ * @return            number of bytes written to buf, 0 if no data arrived
+ */
+size_t klipper_host_output_wait(uint8_t *buf, size_t buf_size,
+                                uint32_t timeout_ms);
 
 /**
  * Run the klipper main scheduling loop (blocking).
