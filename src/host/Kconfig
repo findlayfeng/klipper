@@ -25,6 +25,17 @@ config HOST_LIBRARY_NAME
     help
         Name of the generated static library (without lib/ .a prefix)
 
+config HOST_FRAME_API
+    bool "Hand whole protocol frames to the caller"
+    default n
+    help
+        Adds klipper_host_output_frame(), which returns one complete message
+        block per call instead of a byte stream. Klipper already produces
+        whole frames, so with this the caller does not have to reassemble
+        them, at the cost of a buffer big enough for the largest frame.
+
+        The byte stream API stays available either way.
+
 config HOST_AR_LIBRARY
     bool "Build as AR static library (.a)"
     default y

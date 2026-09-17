@@ -87,6 +87,28 @@ size_t klipper_host_output_wait(uint8_t *buf, size_t buf_size,
                                 uint32_t timeout_ms);
 
 /**
+ * Retrieve one complete protocol frame, waiting for it to arrive.
+ * Thread-safe: can be called from any thread at any time.
+ *
+ * Only present when the library was built with CONFIG_HOST_FRAME_API. Every
+ * message klipper sends is framed before it is buffered, so this returns exactly
+ * one frame - from its length byte through its trailing SYNC, found with that
+ * length byte rather than by looking for SYNC, since a payload may contain one -
+ * and never a piece of one. Callers that always want frames do not need to
+ * reassemble the byte stream that klipper_host_output_wait() hands over.
+ *
+ * @param buf         output buffer to fill; must hold MESSAGE_MAX (64) bytes,
+ *                    otherwise nothing is returned
+ * @param buf_size    size of buffer
+ * @param timeout_ms  how long to wait for a frame; 0 returns immediately
+ * @return            frame bytes written to buf, 0 if no frame arrived in time
+ */
+#if CONFIG_HOST_FRAME_API
+size_t klipper_host_output_frame(uint8_t *buf, size_t buf_size,
+                                 uint32_t timeout_ms);
+#endif
+
+/**
  * Run the klipper main scheduling loop (blocking).
  * This function blocks until klipper_host_shutdown() is called.
  * Internal shutdowns (e.g. emergency_stop) keep the loop running

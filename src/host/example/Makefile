@@ -11,31 +11,39 @@ OUT = $(KLIPPER_ROOT)/out
 CROSS_PREFIX ?=
 CC = $(CROSS_PREFIX)gcc
 
-# NOTE: do NOT add -I$(KLIPPER_ROOT)/src here. Klipper's src/ contains
-# its own sched.h/command.h headers that would shadow the system headers
-# (e.g. <sched.h> included by <pthread.h>). Only the public API header
-# directory is needed.
-CFLAGS = -I$(KLIPPER_ROOT)/src/host \
+# Include paths: the public API header, plus $(OUT) for the generated
+# autoconf.h that says how the library was built. Do NOT add
+# -I$(KLIPPER_ROOT)/src: Klipper's src/ has its own sched.h/command.h that would
+# shadow the system headers (e.g. <sched.h> included by <pthread.h>).
+CFLAGS = -I$(KLIPPER_ROOT)/src/host -I$(OUT) \
          -std=gnu11 -O2 -Wall -g \
          -pthread
 
 all: klipper_host_example klipper_host_burst
 
-klipper_host_example: main.c
+klipper_host_example: main.c $(OUT)/libklipper_host.so
 	$(CC) $(CFLAGS) -o $@ $< -L$(OUT) -lklipper_host -lrt -ldl -pthread
 
 run: klipper_host_example
 	LD_LIBRARY_PATH=$(OUT) ./klipper_host_example
 
-# Self-checking buffer test (see burst.c); `make test` runs it.
-klipper_host_burst: burst.c
+# Self-checking buffer test (see burst.c); `make test` runs it. Needs a library
+# built with the default (byte stream) API.
+klipper_host_burst: burst.c $(OUT)/libklipper_host.so
 	$(CC) $(CFLAGS) -o $@ $< -L$(OUT) -lklipper_host -lrt -ldl -pthread
 
 # The library is not installed, so point the loader at the build directory.
 test: klipper_host_burst
 	LD_LIBRARY_PATH=$(OUT) ./klipper_host_burst
 
-clean:
-	rm -f klipper_host_example klipper_host_burst
+# Needs a library built with CONFIG_HOST_FRAME_API=y; see the comment in frames.c.
+klipper_host_frames: frames.c $(OUT)/libklipper_host.so
+	$(CC) $(CFLAGS) -o $@ $< -L$(OUT) -lklipper_host -lrt -ldl -pthread
 
-.PHONY: all clean run test
+frames: klipper_host_frames
+	LD_LIBRARY_PATH=$(OUT) ./klipper_host_frames
+
+clean:
+	rm -f klipper_host_example klipper_host_burst klipper_host_frames
+
+.PHONY: all clean frames run test

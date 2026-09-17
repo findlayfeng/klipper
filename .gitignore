@@ -6,3 +6,4 @@ out
 klippy/.version
 src/host/example/klipper_host_example
 src/host/example/klipper_host_burst
+src/host/example/klipper_host_frames

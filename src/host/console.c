@@ -34,11 +34,15 @@
 #include <string.h> // memcpy, memmove
 #include <time.h> // clock_gettime, struct timespec
 #include <pthread.h> // pthread_mutex_t, pthread_cond_t
+#include "autoconf.h" // CONFIG_HOST_FRAME_API
 #include "board/misc.h" // console_sendf, console_receive_buffer
 #include "command.h" // command_encode_and_frame, command_find_and_dispatch
 #include "sched.h" // sched_wake_task, DECL_TASK, DECL_SHUTDOWN
 #include "internal.h" // klipper_console_unlock
 #include "klipper_host.h" // klipper_host_input, klipper_host_output
+
+// A frame is at most MESSAGE_MAX bytes, trailer included
+#define FRAME_MAX MESSAGE_MAX
 
 // The transmit buffer starts at the size of the firmware's own receive buffer
 // and grows while the host is behind, because the alternative - stalling klipper
@@ -241,6 +245,61 @@ klipper_host_output(uint8_t *buf, size_t buf_size)
 {
     return klipper_host_output_wait(buf, buf_size, 0);
 }
+
+#if CONFIG_HOST_FRAME_API
+// Retrieve one complete frame, waiting for it if needed.
+//
+// Every message klipper sends is framed before it reaches this buffer
+// (command_encode_and_frame), so the buffer holds nothing but whole frames, and
+// the frame's own length byte says where it ends - scanning for SYNC would cut
+// a frame whose payload happens to contain a 0x7e (compressed identify data
+// does). That is the whole point of this call: a host that only ever wants
+// frames does not have to reassemble a byte stream to find their boundaries.
+//
+// buf_size must be at least MESSAGE_MAX: a frame that does not fit is not
+// split further - the call reports nothing and leaves the buffer alone.
+size_t
+klipper_host_output_frame(uint8_t *buf, size_t buf_size, uint32_t timeout_ms)
+{
+    if (!buf || buf_size < FRAME_MAX)
+        return 0;
+
+    pthread_mutex_lock(&tx_mutex);
+    size_t end = 0;
+    struct timespec deadline;
+    int waiting = timeout_ms != 0;
+    if (waiting) {
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        add_ms(&deadline, timeout_ms);
+    }
+    for (;;) {
+        if (tx_max > tx_pos) {
+            uint8_t msglen = tx_buf[tx_pos];
+            if (msglen >= MESSAGE_MIN && msglen <= MESSAGE_MAX
+                && tx_max - tx_pos >= msglen) {
+                end = tx_pos + msglen;
+                break;
+            }
+        }
+        if (!waiting || !ms_left(&deadline))
+            break;
+        pthread_cond_timedwait(&tx_cond, &tx_mutex, &deadline);
+    }
+
+    size_t n = end ? end - tx_pos : 0;
+    if (n)
+        memcpy(buf, &tx_buf[tx_pos], n);
+    tx_pos = end;
+    if (tx_pos == tx_max)
+        tx_pos = tx_max = 0;
+    pthread_mutex_unlock(&tx_mutex);
+
+    // Reading freed room for a writer that was waiting for it.
+    if (n)
+        pthread_cond_broadcast(&tx_cond);
+    return n;
+}
+#endif // CONFIG_HOST_FRAME_API
 
 // Parse and dispatch complete message blocks from the receive buffer.
 // Runs in the klipper task loop; holds rx_mutex while dispatching so

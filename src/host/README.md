@@ -24,6 +24,7 @@ Kconfig 中 `MACH_HOST` 已启用最小配置：只包含核心调度器、命�
 | `klipper_host_input(data, len)` | 线程安全，向 klipper 输入二进制协议字节（**要么整块收下，要么返回 0**） |
 | `klipper_host_output(buf, size)` | 线程安全，读取 klipper 输出的帧数据（不等待） |
 | `klipper_host_output_wait(buf, size, ms)` | 同上，但在没有数据时最多等待 `ms` 毫秒；专用读取线程应当用它而不是轮询 |
+| `klipper_host_output_frame(buf, size, ms)` | 同上的等待语义，但**每次返回恰好一帧**（由帧自己的长度字节界定）；需要 `CONFIG_HOST_FRAME_API=y` 才编进库 |
 | `klipper_host_run()` | 阻塞运行 klipper 主循环（在独立线程中调用） |
 | `klipper_host_step()` | 非阻塞单步执行（用于集成外部事件循环） |
 | `klipper_host_shutdown()` | 线程安全，请求关闭，使 run() 返回 |
@@ -45,6 +46,16 @@ klipper_host_output(buf, sizeof(buf));             // 读取响应（不等待�
 // 或者用一个专职线程阻塞等待：
 size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 ```
+
+### 帧接口开关（`CONFIG_HOST_FRAME_API`）
+
+`menuconfig` 里的 "Hand whole protocol frames to the caller"，默认关闭。
+
+关闭时（默认）调用方拿到的是**字节流**：`klipper_host_output_wait()` 可能返回半帧，也可能一次返回好几帧，边界要自己找。打开后会多出 `klipper_host_output_frame()`：klipper 本来就是把每条消息先成帧再放进缓冲区的，所以库自己知道边界——它按帧的**长度字节**取整帧（**不能靠找 SYNC**：压缩过的 identify 数据里就可能带 `0x7e`）。
+
+两种模式都不丢消息，取舍只在"谁来负责找帧边界"：库里找（省掉调用方的重组逻辑，代价是缓冲区至少 `MESSAGE_MAX` 字节）还是调用方找。
+
+`make frames` 是这一开关的自检（见 `example/frames.c`，需要先用 `CONFIG_HOST_FRAME_API=y` 构建库）。
 
 **两个缓冲区都是有限的（各 4096 字节起步），并且两条路径都不会弄丢半条消息**：
 
@@ -70,6 +81,8 @@ make test     # 自检：缓冲区边界（burst.c）
 
 `klipper_host_example` 演示：启动 klipper 线程、接收 "starting" 帧、
 发送 `get_clock` 命令并读取响应、优雅关闭。
+
+`make frames` 跑 `frames.c`（需要 `CONFIG_HOST_FRAME_API=y` 构建的库）：验证每次调用返回的确实**恰好一帧**——长度字节自洽、以 SYNC 结尾，并且 48 字节的响应与 5 字节的 ack 各自独立成帧。
 
 `make test` 跑 `burst.c`：连续灌入 2048 条命令（输入 12KB、输出约 16KB，
 都超过初始缓冲区），期间不读任何输出，然后验证**每条命令都有响应**。
