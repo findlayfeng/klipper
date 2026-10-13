@@ -60,6 +60,36 @@ config SERIAL_BAUD
         Specify the baud rate of the serial port. This should be set
         to 250000. Read the FAQ before changing this value.
 
+# Generic configuration options for the serial mux (MUX) and for bridge mode
+# (BRIDGE).
+#
+# MUX is the device half: a firmware that can be addressed inside a shared byte
+# stream - it answers the scan/admin channel, adopts the node id it is handed,
+# and handles an id collision the way the CAN code does
+# (generic/canserial.c:can_id_conflict). Every firmware wants it, whatever
+# carries the stream: MUX_SERIAL today, MUX_CAN to follow.
+#
+# BRIDGE is the router on top of it: it owns several ports - its own klipper
+# instance is one of them - and forwards each addressed unit to the port that
+# owns the id. Which ports it has is the arch's to say: BRIDGE_PORT_SERIAL
+# today, where the host names the tty with HOST_BRIDGE_SERIAL_PATH.
+config MUX
+    bool
+config MUX_SERIAL
+    bool
+config BRIDGE
+    bool
+    select MUX
+config BRIDGE_PORT_SERIAL
+    bool
+config BRIDGE_PORT_SERIAL_BAUD
+    depends on BRIDGE_PORT_SERIAL
+    int "Baud rate for the bridge serial port" if LOW_LEVEL_OPTIONS
+    default 250000
+    help
+        Specify the baud rate of the serial port a bridge opens. This should
+        be set to 250000. Read the FAQ before changing this value.
+
 # Generic configuration options for USB
 config USBSERIAL
     bool

@@ -20,7 +20,8 @@ Kconfig 中 `MACH_HOST` 已启用最小配置：只包含核心调度器、命�
 
 | 函数 | 说明 |
 |------|------|
-| `klipper_host_init()` | 初始化库 |
+| `klipper_host_init()` | 初始化库（桥模式下同时打开串口，打不开就返回 -1） |
+| `klipper_host_set_uuid(uuid[6])` | 设置本库在串口复用里的**身份**；**必须在 `init` 前**调用，`init` 后再调返回 -1，不调 = 全 `0` |
 | `klipper_host_input(data, len)` | 线程安全，向 klipper 输入二进制协议字节（**要么整块收下，要么返回 0**） |
 | `klipper_host_output(buf, size)` | 线程安全，读取 klipper 输出的帧数据（不等待） |
 | `klipper_host_output_wait(buf, size, ms)` | 同上，但在没有数据时最多等待 `ms` 毫秒；专用读取线程应当用它而不是轮询 |
@@ -57,6 +58,41 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 
 `make frames` 是这一开关的自检（见 `example/frames.c`，需要先用 `CONFIG_HOST_FRAME_API=y` 构建库）。
 
+### 桥模式（`CONFIG_HOST_BRIDGE_SERIAL`）
+
+`menuconfig` 里的 "Bridge mode: add a serial port to the console"，默认关闭。
+
+桥模式给控制台**再挂端口**，由固件在各端口之间转发（固件内部多路复用，串口只是其中一种端口）。它是**面向所有固件**的特性，host 只是第一个落点，因此分层为「传输无关的公共符号 + 架构给的端口」：
+
+| 选项 | 位置 | 含义 | 默认 |
+|------|------|------|------|
+| `MUX` | `src/Kconfig`（公共、隐藏） | **设备半**：能被寻址、应答扫描/admin、采纳 nodeid、碰撞规则（逐字对照 CAN 的 `can_id_conflict`） | — |
+| `MUX_SERIAL` | `src/Kconfig`（公共） | 设备半跑在串口/字节流上 | — |
+| `BRIDGE` | `src/Kconfig`（公共、隐藏） | **桥半**：端口表 + 路由 + 扇出（`select MUX`） | — |
+| `BRIDGE_PORT_SERIAL` | `src/Kconfig`（公共） | 桥有串口下游端口 | — |
+| `BRIDGE_PORT_SERIAL_BAUD` | `src/Kconfig`（公共） | 该端口速率（写法同 `SERIAL_BAUD`） | `250000` |
+| `HOST_BRIDGE_SERIAL` | `src/host/Kconfig` | host 上的可见开关，`select BRIDGE`/`BRIDGE_PORT_SERIAL`/`MUX_SERIAL` | `n` |
+| `HOST_BRIDGE_SERIAL_PATH` | `src/host/Kconfig` | 打开的 tty 路径 | `/dev/ttyACM0` |
+
+架构只回答"桥的是哪个端口"：host 没有固定端口表，所以是**路径字符串**（默认
+`/dev/ttyACM0`）；微控制器将来照自己给控制台选 UART 的做法给一份 `choice` 备选串口
+（`AVR_SERIAL_UART*` / `STM32_SERIAL_USART*` 那种）。`MUX_CAN` / `BRIDGE_PORT_CAN`
+（CAN 也是端口，见 `src/Kconfig` 注释）随 CAN 后端一起落地。
+
+本步实现到**打开并持有 fd** 为止：
+
+- 打开时机是 `klipper_host_init()`，一个库一次；端口**非阻塞**打开
+  （`O_RDWR|O_NOCTTY|O_NONBLOCK|O_CLOEXEC`），将来与其它工作一起 poll，做法同
+  `src/linux/console.c` 对它的 tty。
+- **打不开就让 `klipper_host_init()` 返回 -1**：桥模式是构建期显式要的，静默降级会让
+  宿主以为桥在而实际没有。原因写 stderr，例如
+  `bridge serial: /dev/ttyACM0 failed: (2)No such file or directory`。
+- 只有 `CONFIG_BRIDGE_PORT_SERIAL=y` 才编 `bridge.c`；默认（`=n`）根本不参与构建，
+  宿主 API 的行为一个字节都不变。
+- **身份由主机指派**：MUX 按身份寻址，而库是主机加载的文件、自己没有可派生的东西（按路径派生还可能与其他设备撞车），所以身份由主机在 `init` 前用 `klipper_host_set_uuid()` 给出，不调就是全 `0`。已实现：存储 + `init` 时报一行 `mux uuid: <12 位十六进制>`；消费它的 MUX 设备半（应答扫描/admin、采纳 nodeid、碰撞规则）是下一步。
+- 串口与控制台之间的**接线**（把串口收到的字节喂进控制台、把控制台输出写进串口）
+  尚未实现，属下一步。
+
 **两个缓冲区都是有限的（各 4096 字节起步），并且两条路径都不会弄丢半条消息**：
 
 | 情况 | 行为 |
@@ -92,10 +128,13 @@ make test     # 自检：缓冲区边界（burst.c）
 
 - `host.c`    – 主循环入口；通过 `sched_main()` 运行调度器，外部关闭
   用 SIGUSR1 + longjmp 中断（内部急停仍由 sched_main 处理，可
-  `config_reset` 恢复）。
+  `config_reset` 恢复）。`klipper_host_init()` 里按 Kconfig 打开桥模式的串口。
 - `console.c` – 线程安全的收发缓冲区（mutex + condvar 保护）；实现
   `console_sendf()` / `console_receive_buffer()`；输入线程写入后唤醒
   console task 解析分派。输入侧全有或全无，输出侧可扩容，见上表。
 - `timer.c`   – 基于 `clock_gettime(CLOCK_MONOTONIC)` 的时钟与
   irq 模拟；`timer_dispatch_many()` 等来自 `generic/timer_irq.c`。
+- `bridge.c`  – host 的**串口下游端口后端**（`CONFIG_BRIDGE_PORT_SERIAL`）：打开、置 raw 8N1
+  （速率经 `termios2`/`BOTHER`，支持任意速率）、持有 fd；默认不参与构建。设备身份由**主机
+  指派**（不走路径派生），随 step 2 的 `MUX` 一起落地。
 - `klipper_host.h` / `internal.h` – 公开 API / 内部接口。

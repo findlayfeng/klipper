@@ -33,6 +33,22 @@ extern "C" {
 int klipper_host_init(void);
 
 /**
+ * Set the identity this library answers the serial mux with.
+ *
+ * The mux addresses devices by identity: this is what the library's own klipper
+ * instance reports when it is scanned, and what a host names when it hands the
+ * device its node id. The host assigns it - the library is a file the host
+ * loads, so it has nothing of its own to derive one from - and it has to be set
+ * before klipper_host_init(), because the identity is fixed once the device is
+ * up. Left unset, the identity is all zeros.
+ *
+ * @param uuid  6 bytes, most significant byte first - the order a `[mcu] uuid:`
+ *              option is written in
+ * @return      0 on success, -1 when klipper_host_init() has already run
+ */
+int klipper_host_set_uuid(const uint8_t uuid[6]);
+
+/**
  * Feed input data into the klipper console.
  * Thread-safe: can be called from any thread at any time.
  * The data is copied into an internal buffer and processed

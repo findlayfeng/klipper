@@ -36,6 +36,30 @@ config HOST_FRAME_API
 
         The byte stream API stays available either way.
 
+config HOST_BRIDGE_SERIAL
+    bool "Bridge mode: add a serial port to the console"
+    default n
+    select BRIDGE
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        Klipper has one console, and this library hands it to the caller
+        through klipper_host_input()/klipper_host_output(). With this, the
+        firmware also owns a serial port - another port on that console - and
+        opens it during klipper_host_init().
+
+        Off by default: the library then talks only through the
+        klipper_host_*() API and opens no device.
+
+config HOST_BRIDGE_SERIAL_PATH
+    string "Serial port the bridge opens"
+    depends on HOST_BRIDGE_SERIAL
+    default "/dev/ttyACM0"
+    help
+        The tty opened at init. The host has no fixed list of ports to choose
+        from, so this is a path rather than a choice; /dev/ttyACM0 is the
+        conventional Linux default (klipper's example configs all name it).
+
 config HOST_AR_LIBRARY
     bool "Build as AR static library (.a)"
     default y

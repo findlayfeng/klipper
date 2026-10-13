@@ -17,12 +17,14 @@
 #include <setjmp.h> // setjmp, longjmp
 #include <signal.h> // sigaction, SIGUSR1
 #include <pthread.h> // pthread_t, pthread_self, pthread_kill
-#include <string.h> // memset
+#include <stdio.h> // fprintf
+#include <string.h> // memset, memcpy
+#include "autoconf.h" // CONFIG_MUX_SERIAL, CONFIG_BRIDGE_PORT_SERIAL
 #include "basecmd.h" // stats_update
 #include "board/irq.h" // irq_poll
 #include "board/misc.h" // timer_read_time
 #include "sched.h" // sched_main, sched_is_shutdown
-#include "internal.h" // klipper_console_unlock
+#include "internal.h" // klipper_console_unlock, bridge_setup
 #include "klipper_host.h"
 
 // Global state
@@ -30,6 +32,12 @@ static volatile sig_atomic_t g_shutdown_requested;
 static pthread_t g_klipper_thread;
 static volatile int g_klipper_thread_active;
 static jmp_buf g_main_jmp;
+static int g_initialised;
+
+// The identity the host assigned this library (klipper_host_set_uuid). All
+// zeros until the host sets it, which is also the identity of a device nobody
+// has named yet.
+static uint8_t g_mux_uuid[6];
 
 // SIGUSR1 handler - longjmp out of sched_main() on external shutdown
 static void
@@ -38,6 +46,18 @@ sigusr1_handler(int sig)
     (void)sig;
     if (g_shutdown_requested)
         longjmp(g_main_jmp, 1);
+}
+
+// Set the identity this library answers the serial mux with.
+// Has to happen before klipper_host_init(): the identity is fixed once the
+// device is up, so a late call is reported rather than half-applied.
+int
+klipper_host_set_uuid(const uint8_t uuid[6])
+{
+    if (g_initialised)
+        return -1;
+    memcpy(g_mux_uuid, uuid, sizeof(g_mux_uuid));
+    return 0;
 }
 
 // Initialize the host library
@@ -54,6 +74,23 @@ klipper_host_init(void)
     sa.sa_flags = 0;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGUSR1, &sa, NULL);
+
+#if CONFIG_MUX_SERIAL
+    // The identity is the host's to assign (klipper_host_set_uuid); report what
+    // this device will answer the mux with, so a host that never set one can
+    // see that it is talking to the unnamed device.
+    fprintf(stderr, "mux uuid: %02x%02x%02x%02x%02x%02x\n",
+            g_mux_uuid[0], g_mux_uuid[1], g_mux_uuid[2],
+            g_mux_uuid[3], g_mux_uuid[4], g_mux_uuid[5]);
+#endif
+
+    // Bridge mode: take the firmware's serial port now, so a port that cannot
+    // be opened fails the init instead of surfacing later as a dead bridge.
+#if CONFIG_BRIDGE_PORT_SERIAL
+    if (bridge_setup() < 0)
+        return -1;
+#endif
+    g_initialised = 1;
     return 0;
 }
 

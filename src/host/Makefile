@@ -23,6 +23,9 @@
 #   klipper_host_is_shutdown()- Check shutdown status
 #   klipper_host_get_clock()  - Get current clock time
 #
+# With CONFIG_BRIDGE (bridge mode) the library also opens a serial port (see
+# host/bridge.c) instead of talking only through those functions.
+#
 # No peripherals (GPIO/SPI/I2C/ADC/PWM/sensors) are implemented.
 
 dirs-y += src/host src/generic
@@ -31,6 +34,12 @@ dirs-y += src/host src/generic
 # timer_is_before(), timer_dispatch_many() and timer_task().
 src-y += host/host.c host/console.c host/timer.c
 src-y += generic/crc16_ccitt.c generic/alloc.c generic/timer_irq.c
+
+# Bridge mode: this arch's serial port backend (BRIDGE_PORT_SERIAL between
+# CONFIG_BRIDGE_PORT_SERIAL) - gives the bridge a downstream port. The router
+# itself (CONFIG_BRIDGE) and the device half (CONFIG_MUX) are transport-neutral
+# and live outside this directory.
+src-$(CONFIG_BRIDGE_PORT_SERIAL) += host/bridge.c
 
 # Link flags for the host library
 CFLAGS_klipper.elf += -pthread -lrt -ldl

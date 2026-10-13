@@ -14,4 +14,8 @@ void klipper_console_unlock(void);
 // klipper is asked to shut down)
 void klipper_console_wake(void);
 
+// bridge.c - open the host's bridge serial port (CONFIG_BRIDGE_PORT_SERIAL).
+// Returns 0 when the port is open, -1 when it cannot be brought up.
+int bridge_setup(void);
+
 #endif // host/internal.h
