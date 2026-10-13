@@ -40,7 +40,7 @@
 #include "sched.h" // sched_wake_task, DECL_TASK, DECL_SHUTDOWN
 #include "internal.h" // klipper_console_unlock
 #include "klipper_host.h" // klipper_host_input, klipper_host_output
-#include "mux.h" // mux_decode_header, MUX_HEADER_BYTES
+#include "mux.h" // mux_decode_header, mux_input, mux_out_header
 
 // A frame is at most MESSAGE_MAX bytes, trailer included
 // One message block, and one mux unit (its header plus the block behind it).
@@ -123,19 +123,22 @@ console_receive_buffer(void)
     return rx_buf;
 }
 
-// Encode and buffer a "response" message (called from klipper's sendf)
-void
-console_sendf(const struct command_encoder *ce, va_list args)
+// Append already-framed bytes to the transmit buffer.
+//
+// Compacting, growing, and - at the cap - waiting rather than dropping are the
+// same policy for every writer: the console's own responses (console_sendf) and
+// the mux's answers on the admin channel (mux_send). They land in the one buffer
+// the byte stream drains, which is what makes the byte stream API and the unit
+// API two views of the same traffic.
+static void
+tx_append(const uint8_t *bytes, uint_fast8_t len)
 {
-    uint8_t msg_buf[MESSAGE_MAX];
-    uint_fast8_t msglen = command_encode_and_frame(
-        msg_buf, sizeof(msg_buf), ce, args);
-    if (!msglen)
+    if (!bytes || !len)
         return;
 
     pthread_mutex_lock(&tx_mutex);
     // Compact the buffer if needed to make room for the new message
-    if (tx_max + msglen > tx_size) {
+    if (tx_max + len > tx_size) {
         size_t used = tx_max - tx_pos;
         if (used)
             memmove(tx_buf, &tx_buf[tx_pos], used);
@@ -143,7 +146,7 @@ console_sendf(const struct command_encoder *ce, va_list args)
         tx_pos = 0;
 
         // Then grow, so a host that is momentarily behind does not stall klipper.
-        size_t wanted = tx_max + msglen;
+        size_t wanted = tx_max + len;
         if (wanted > tx_size && tx_size < TX_BUFFER_MAX) {
             size_t size = tx_size ? tx_size : TX_BUFFER_MIN;
             while (size < wanted && size < TX_BUFFER_MAX)
@@ -162,20 +165,50 @@ console_sendf(const struct command_encoder *ce, va_list args)
         struct timespec deadline;
         clock_gettime(CLOCK_REALTIME, &deadline);
         add_ms(&deadline, OUTPUT_WAIT_MS);
-        while (tx_max + msglen > tx_size && ms_left(&deadline))
+        while (tx_max + len > tx_size && ms_left(&deadline))
             pthread_cond_timedwait(&tx_cond, &tx_mutex, &deadline);
     }
 
-    if (tx_max + msglen <= tx_size) {
-        memcpy(&tx_buf[tx_max], msg_buf, msglen);
-        tx_max += msglen;
+    if (tx_max + len <= tx_size) {
+        memcpy(&tx_buf[tx_max], bytes, len);
+        tx_max += len;
         pthread_cond_broadcast(&tx_cond);
     } else {
         fprintf(stderr, "klipper host: no room for a %u byte response after "
-                "%ums, dropping it\n", (unsigned)msglen, OUTPUT_WAIT_MS);
+                "%ums, dropping it\n", (unsigned)len, OUTPUT_WAIT_MS);
     }
     pthread_mutex_unlock(&tx_mutex);
 }
+
+// Encode and buffer a "response" message (called from klipper's sendf)
+void
+console_sendf(const struct command_encoder *ce, va_list args)
+{
+    // In mux mode our own frames go out as units, the reply header naming us the
+    // way the incoming unit named us. A device with no node id keeps the old
+    // wire format instead: bare frames, which is what a path with one device on
+    // it carries.
+    uint8_t unit_buf[MUX_HEADER_BYTES + MESSAGE_MAX];
+    uint_fast8_t offset = 0;
+#if CONFIG_MUX_SERIAL
+    offset = mux_out_header(unit_buf);
+#endif
+    uint_fast8_t msglen = command_encode_and_frame(
+        unit_buf + offset, sizeof(unit_buf) - offset, ce, args);
+    if (!msglen)
+        return;
+    tx_append(unit_buf, offset + msglen);
+}
+
+#if CONFIG_MUX_SERIAL
+// Bytes the mux sends upward: its answers on the admin channel, whole units
+// already.
+void
+mux_send(const uint8_t *bytes, uint_fast8_t len)
+{
+    tx_append(bytes, len);
+}
+#endif // CONFIG_MUX_SERIAL
 
 // Feed input data (public API, thread-safe)
 ssize_t
@@ -419,6 +452,21 @@ console_task(void)
         return;
     pthread_mutex_lock(&rx_mutex);
     for (;;) {
+#if CONFIG_MUX_SERIAL
+        // Units first: the admin channel is answered in here, and one of our own
+        // frames is left at the front with its header stripped, for the parser
+        // below. A unit that has not arrived whole stops this task - its leading
+        // bytes are not a frame, and the parser must not read them as one.
+        //
+        // The count goes through a local because the buffer's length is
+        // volatile (the input side writes it); the mutex is held here, so
+        // reading it out and writing it back is the same thing.
+        size_t count = rx_count;
+        int ready = mux_input(rx_buf, &count);
+        rx_count = count;
+        if (!ready)
+            break;
+#endif
         if (rx_count < MESSAGE_MIN)
             break;
         uint_fast8_t buf_len = rx_count > 255 ? 255 : (uint_fast8_t)rx_count;

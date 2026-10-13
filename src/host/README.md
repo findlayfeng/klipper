@@ -105,8 +105,14 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 - 只有 `CONFIG_BRIDGE_PORT_SERIAL=y` 才编 `bridge.c`；默认（`=n`）根本不参与构建，
   宿主 API 的行为一个字节都不变。
 - **身份由主机指派**：MUX 按身份寻址，而库是主机加载的文件、自己没有可派生的东西（按路径派生还可能与其他设备撞车），所以身份由主机在 `init` 前用 `klipper_host_set_uuid()` 给出，不调就是全 `0`。已实现：存储 + `init` 时报一行 `mux uuid: <12 位十六进制>`；消费它的 MUX 设备半（应答扫描/admin、采纳 nodeid、碰撞规则）是下一步。
-- 串口与控制台之间的**接线**（把串口收到的字节喂进控制台、把控制台输出写进串口）
-  尚未实现，属下一步。
+- **设备半已实现**（固件 `src/mux.c`）：未分配时答 `0x00` 扫描（`0x3f1` 上带自己的 uuid）、
+  按 `0x01 <uuid> <id>` 采纳 node id（幂等）、别人的 uuid 被指派到已持有的 id 时照 CAN 的
+  `can_id_conflict` 弃号并 `shutdown`；输入侧 `mux_input()` 在控制台任务里就地解析——
+  **首字节高位置位 = 带头单元**（admin 就地处理；自己的单元**剥掉 2 字节头**后仍由
+  `command_find_and_dispatch` 处理），**否则 = 原始帧**（旧线上格式照旧）。已采纳 id 后，
+  自己发出的帧会带上应答头（`mux_out_header`），所以字节流与 unit 接口看到的是同一串单元。
+- 桥的**下游端口接线与路由**（`CONFIG_BRIDGE`：把下游端口的收发接进这条链路、`id ↔ 端口`
+  路由表与扇出）尚未实现，属下一步。
 
 **两个缓冲区都是有限的（各 4096 字节起步），并且两条路径都不会弄丢半条消息**：
 
@@ -149,6 +155,7 @@ make test     # 自检：缓冲区边界（burst.c）
   console task 解析分派。输入侧全有或全无，输出侧可扩容，见上表。
 - `timer.c`   – 基于 `clock_gettime(CLOCK_MONOTONIC)` 的时钟与
   irq 模拟；`timer_dispatch_many()` 等来自 `generic/timer_irq.c`。
+- `mux.c` – 也是公共的：单元格式与设备半（上面「桥模式」一节）
 - `bridge.c`  – host 的**串口下游端口后端**（`CONFIG_BRIDGE_PORT_SERIAL`）：打开、置 raw 8N1
   （速率经 `termios2`/`BOTHER`，支持任意速率）、持有 fd；默认不参与构建。设备身份由**主机
   指派**（不走路径派生），随 step 2 的 `MUX` 一起落地。

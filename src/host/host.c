@@ -25,6 +25,7 @@
 #include "board/misc.h" // timer_read_time
 #include "sched.h" // sched_main, sched_is_shutdown
 #include "internal.h" // klipper_console_unlock, bridge_setup
+#include "mux.h" // mux_set_uuid, mux_uuid
 #include "klipper_host.h"
 
 // Global state
@@ -34,10 +35,7 @@ static volatile int g_klipper_thread_active;
 static jmp_buf g_main_jmp;
 static int g_initialised;
 
-// The identity the host assigned this library (klipper_host_set_uuid). All
-// zeros until the host sets it, which is also the identity of a device nobody
-// has named yet.
-static uint8_t g_mux_uuid[6];
+
 
 // SIGUSR1 handler - longjmp out of sched_main() on external shutdown
 static void
@@ -56,7 +54,14 @@ klipper_host_set_uuid(const uint8_t uuid[6])
 {
     if (g_initialised)
         return -1;
-    memcpy(g_mux_uuid, uuid, sizeof(g_mux_uuid));
+    // The mux owns the identity - it is what the device answers a scan with and
+    // what an assignment names. Without the mux there is nothing to answer, so
+    // the value is accepted and has no effect.
+#if CONFIG_MUX_SERIAL
+    mux_set_uuid(uuid);
+#else
+    (void)uuid;
+#endif
     return 0;
 }
 
@@ -79,9 +84,9 @@ klipper_host_init(void)
     // The identity is the host's to assign (klipper_host_set_uuid); report what
     // this device will answer the mux with, so a host that never set one can
     // see that it is talking to the unnamed device.
+    const uint8_t *uuid = mux_uuid();
     fprintf(stderr, "mux uuid: %02x%02x%02x%02x%02x%02x\n",
-            g_mux_uuid[0], g_mux_uuid[1], g_mux_uuid[2],
-            g_mux_uuid[3], g_mux_uuid[4], g_mux_uuid[5]);
+            uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5]);
 #endif
 
     // Bridge mode: take the firmware's serial port now, so a port that cannot

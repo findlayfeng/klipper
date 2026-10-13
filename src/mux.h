@@ -1,6 +1,7 @@
 #ifndef __MUX_H
 #define __MUX_H
 
+#include <stddef.h> // size_t
 #include <stdint.h> // uint8_t, uint32_t
 
 // The serial mux: the unit format a shared byte stream carries.
@@ -14,9 +15,10 @@
 // The specification is docs/klippy/developer-manual/serial-mux-protocol.md in
 // the klipperx checkout; the definitions here mirror its single Rust
 // implementation (src/core/klippy/interface/devices/serial.rs and
-// src/core/klippy/assign.rs). mux.c holds the encoding, the decoders and the
-// unit builders; the device half that uses them (answering the admin channel,
-// adopting a node id, the id-collision rule) is the next piece.
+// src/core/klippy/assign.rs). mux.c holds the encoding, the decoders, the unit
+// builders, and the device half that uses them: the identity and node id this
+// device answers with, the admin channel it replies on, the id-collision rule,
+// and the in-place resolution of an incoming stream (mux_input).
 
 // The id a device is addressed by, as arbitration ids: CAN's mapping, and the
 // same one the host uses (assign.rs). `mux_arb_id` and `mux_reply_arb_id`
@@ -88,5 +90,41 @@ uint_fast8_t mux_need_nodeid(uint8_t *buf, uint_fast8_t buf_size
                              , const uint8_t *uuid, int with_app, uint8_t app);
 uint_fast8_t mux_assignment_reply(uint8_t *buf, uint_fast8_t buf_size
                                   , uint32_t nodeid);
+
+// The device half: who this device is inside the mux, and how a stream reaches
+// it. The identity is the six bytes the host assigns (its own device behind a
+// bridge) or the micro-controller derives from its chip id; the node id starts
+// at 0 ("no address yet") and is adopted from the assignment.
+void mux_set_uuid(const uint8_t *uuid);
+const uint8_t *mux_uuid(void);
+uint32_t mux_node_id(void);
+
+// The header our own frames go out with: 0 bytes while the device has no node
+// id (raw frames, exactly the old wire format), else the reply header naming us.
+// Whoever writes a frame upward calls this first.
+uint_fast8_t mux_out_header(uint8_t *buf);
+
+// Resolve the units at the front of an incoming byte buffer, in place.
+//
+// This is the device's whole input path: whatever carries the stream (the host
+// library's console task today, a micro-controller's serial task later) hands
+// its bytes here before the ordinary frame parser reads them. Admin units are
+// answered or consumed; one of our own frames is left at the front with its
+// header stripped, which is the frame the parser then reads. Raw frames - a
+// path with one device on it - are left alone, which is what keeps the old wire
+// format working.
+//
+// Returns 1 when the front is an ordinary frame the caller's parser should look
+// at, 0 when there is nothing to parse: the front is a unit that was handled, or
+// one that has not arrived whole yet. In the second case the caller must not
+// parse - a unit's leading bytes are not a frame, and reading them as one would
+// lose the unit.
+int mux_input(uint8_t *buf, size_t *len);
+
+// Bytes going upward: implemented by whoever carries the stream
+// (host/console.c today, a micro-controller's serial task later), because only
+// it knows where the transmit buffer is. A frame of our own needs no hook - the
+// input side leaves it at the front of the caller's buffer, header stripped.
+void mux_send(const uint8_t *bytes, uint_fast8_t len);
 
 #endif // mux.h

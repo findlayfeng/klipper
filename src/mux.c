@@ -16,6 +16,7 @@
 #include "command.h" // MESSAGE_*, MESSAGE_SYNC
 #include "generic/misc.h" // crc16_ccitt
 #include "mux.h" // the mux unit format
+#include "sched.h" // shutdown
 
 // The header is a shortened Hamming code: ten data bits and four check bits
 // over fourteen positions, the parity positions being the powers of two and the
@@ -302,4 +303,184 @@ mux_assignment_reply(uint8_t *buf, uint_fast8_t buf_size, uint32_t nodeid)
     if (!arb)
         return 0;
     return mux_kxid_unit(buf, buf_size, arb, 0, 0);
+}
+
+
+/****************************************************************
+ * The device half
+ ****************************************************************/
+
+// The identity the host assigned (or the chip id the micro-controller derived),
+// and the node id this device answers on. All zeros and 0 mean "nothing yet":
+// an unnamed device, told apart by nothing and addressed by nobody.
+static uint8_t mux_identity[MUX_UUID_LEN];
+static uint32_t mux_assigned;
+
+void
+mux_set_uuid(const uint8_t *uuid)
+{
+    memcpy(mux_identity, uuid, MUX_UUID_LEN);
+}
+
+const uint8_t *
+mux_uuid(void)
+{
+    return mux_identity;
+}
+
+uint32_t
+mux_node_id(void)
+{
+    return mux_assigned;
+}
+
+// What our own frames go out with.
+uint_fast8_t
+mux_out_header(uint8_t *buf)
+{
+    if (!mux_assigned)
+        return 0;
+    return mux_encode_header(buf, mux_reply_arb_id(mux_assigned));
+}
+
+// One unit that arrived on the admin id: the assignment handshake, and the two
+// commands an unassigned device answers.
+//
+// A device that has no node id answers the discovery broadcast with its
+// identity and adopts the id it is handed when the assignment names that
+// identity. It answers nothing else: the handshake is the re-confirmation of an
+// id already adopted, so it needs one to answer on.
+static void
+mux_admin_unit(uint8_t *frame, uint_fast8_t frame_len)
+{
+    struct mux_kxid kxid;
+    if (!mux_parse_kxid(frame, frame_len, &kxid))
+        // Not a command of ours: a frame the ordinary parser would reject
+        // anyway. Nothing to answer.
+        return;
+    uint8_t out[MUX_HEADER_BYTES + MESSAGE_MAX];
+    if (!kxid.args_len) {
+        uint_fast8_t n = mux_assignment_reply(out, sizeof(out), mux_assigned);
+        if (n)
+            mux_send(out, n);
+        return;
+    }
+    uint32_t nodeid;
+    switch (kxid.args[0]) {
+    case MUX_CMD_QUERY_UNASSIGNED:
+        if (mux_assigned)
+            // An addressed device stays quiet, which is what makes a scan list
+            // the boards a config still has to name.
+            return;
+        uint_fast8_t n = mux_need_nodeid(out, sizeof(out), mux_identity, 0, 0);
+        if (n)
+            mux_send(out, n);
+        return;
+    case MUX_CMD_SET_KLIPPER_NODEID:
+        if (kxid.args_len < 1 + MUX_UUID_LEN + 1)
+            return;
+        nodeid = kxid.args[1 + MUX_UUID_LEN];
+        if (!memcmp(&kxid.args[1], mux_identity, MUX_UUID_LEN)) {
+            // Ours: adopt it. Idempotent, and an id the wire cannot address is
+            // not adopted at all (there is no header to answer on).
+            if (mux_arb_id(nodeid))
+                mux_assigned = nodeid;
+            return;
+        }
+        if (nodeid && nodeid == mux_assigned)
+            // Someone else was handed the id we already answer on: the CAN
+            // rule, spelled the same way (generic/canserial.c:can_id_conflict) -
+            // give it up and say so, rather than answer for two boards.
+            goto conflict;
+        return;
+    default:
+        return;
+    }
+conflict:
+    mux_assigned = 0;
+    shutdown("Another node assigned this ID");
+}
+
+// One unit that arrived with its header already decoded: what this device does
+// with it. Answers MUX_UNIT_OURS for a frame addressed to us (the caller leaves
+// it for the parser, its header stripped) and MUX_UNIT_CONSUMED for everything
+// else.
+enum mux_unit_result { MUX_UNIT_CONSUMED = 0, MUX_UNIT_OURS = 1 };
+
+static int
+mux_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
+{
+    if (arb == MUX_ADMIN_LISTEN) {
+        mux_admin_unit(frame, frame_len);
+        return MUX_UNIT_CONSUMED;
+    }
+    if (mux_assigned && arb == mux_arb_id(mux_assigned))
+        return MUX_UNIT_OURS;
+    // Anything else addresses a device this one is not. A bridge routes those to
+    // its other ports (and a single-device port gets its header stripped);
+    // without one there is nobody to hand the frame to, so it is dropped.
+    return MUX_UNIT_CONSUMED;
+}
+
+// The unit at the front of the buffer, or 0 when it has not arrived whole.
+static size_t
+mux_unit_len(uint8_t *buf, size_t len, uint32_t *arb, uint_fast8_t *consumed)
+{
+    if (len < MUX_HEADER_BYTES)
+        return 0;
+    if (mux_decode_header(buf, MUX_HEADER_BYTES, arb, consumed)
+        != MUX_HEADER_COMPLETE)
+        // A byte with the framing bit set that is not a header: no frame starts
+        // that way either, so it is dropped and the parse resynchronises on the
+        // next byte - the same policy the frame parser applies to a block it
+        // cannot read.
+        return 1;
+    if (len < (size_t)*consumed + 1)
+        return 0;                     // the length byte is still coming
+    uint_fast8_t msglen = buf[*consumed];
+    if (msglen < MESSAGE_MIN || msglen > MESSAGE_MAX)
+        return *consumed;             // a length no frame has: drop the header
+    if (len < (size_t)*consumed + msglen)
+        return 0;                     // the frame is still arriving
+    return (size_t)*consumed + msglen;
+}
+
+int
+mux_input(uint8_t *buf, size_t *len)
+{
+    for (;;) {
+        if (!*len)
+            return 0;
+        if (!(buf[0] & 0x80))
+            // No header: an ordinary frame, which is what an exclusive path (and
+            // the old wire format) carries. The parser owns it.
+            return 1;
+
+        uint32_t arb;
+        uint_fast8_t consumed;
+        size_t unit_len = mux_unit_len(buf, *len, &arb, &consumed);
+        if (!unit_len)
+            return 0;                 // a unit is on its way: do not parse it
+        if (unit_len == 1 || unit_len == consumed) {
+            // Junk instead of a unit: drop what cannot be a unit and look again.
+            memmove(buf, &buf[unit_len], *len - unit_len);
+            *len -= unit_len;
+            continue;
+        }
+
+        uint_fast8_t msglen = unit_len - consumed;
+        uint8_t held[MESSAGE_MAX];
+        if (mux_unit(arb, &buf[consumed], msglen) == MUX_UNIT_OURS) {
+            // Ours: the frame goes to the parser, its header gone. It is lifted
+            // through a local copy because the tail moves down over where it is.
+            memcpy(held, &buf[consumed], msglen);
+            size_t tail = *len - unit_len;
+            memmove(&buf[msglen], &buf[unit_len], tail);
+            memcpy(buf, held, msglen);
+            *len -= consumed;
+            return 1;
+        }
+        memmove(buf, &buf[unit_len], *len - unit_len);
+        *len -= unit_len;
+    }
 }
