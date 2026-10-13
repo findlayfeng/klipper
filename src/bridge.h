@@ -31,6 +31,15 @@ struct bridge_port_ops {
     // on a port. Returns 0 when the bytes were queued, -1 on an error the
     // backend reports itself.
     int (*write)(void *ctx, const uint8_t *data, size_t len);
+    // Pulse the electrical lines that reset whatever sits behind this port -
+    // the port-level RESET_PORT (mux.h MUX_CMD_RESET_PORT), which is the only
+    // reset a device with no admin channel of its own can ever get. Optional:
+    // NULL for a port with no line-level reset, whose RESET_PORT is dropped in
+    // silence. Returns 0 when the pulse was started and -1 when the port has no
+    // modem lines to drive (a pty, for instance). The command carries no
+    // receipt, so neither value is reported onward; a backend must not block or
+    // busy-wait in here - it schedules the release and returns.
+    int (*reset)(void *ctx);
     void *ctx;
 };
 

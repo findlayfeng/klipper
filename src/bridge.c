@@ -215,6 +215,28 @@ bridge_write_unit(struct bridge_port *p, uint32_t arb, const uint8_t *frame
     p->ops.write(p->ops.ctx, unit, header + frame_len);
 }
 
+// Forward one whole `KXID` unit to a single port: headed for a port whose
+// device speaks units, stripped to its bare frame for a legacy one. The arb is
+// the one the unit arrived on (the admin id), so the device behind a UNITS
+// port sees the command on the channel it listens on.
+static void
+bridge_forward_to_port(int index, uint32_t arb, const uint8_t *frame
+                       , uint_fast8_t frame_len)
+{
+    struct bridge_port *p = &bridge_ports[index];
+    if (!(p->flags & MUX_PORT_UNITS)) {
+        // A legacy device predates the mux: its frame goes out without the
+        // header, and its parser will reject the pseudo-frame's 0x20 sequence
+        // byte - which is exactly right. A device with no admin channel has no
+        // RESET_DEVICE to execute, so this can only ever reach a port whose
+        // device speaks units; a port with no such device is reset at the line
+        // instead (RESET_PORT, mux.h MUX_CMD_RESET_PORT).
+        p->ops.write(p->ops.ctx, frame, frame_len);
+        return;
+    }
+    bridge_write_unit(p, arb, frame, frame_len);
+}
+
 // Ask every downstream port to identify itself, so a uuid a pending assignment
 // names can be located.
 static void
@@ -408,6 +430,38 @@ bridge_admin_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
             // by the tables alone and stays on this side of the wire - it
             // never reaches a downstream port or the local device half.
             bridge_set_port_nodeid(kxid.args, kxid.args_len);
+            return 1;
+        }
+        if (kxid.args[0] == MUX_CMD_RESET_DEVICE) {
+            // A reset aimed at one device, behind the port the host names
+            // ([0x02][index]): forward the command to that port alone and
+            // consume it - no fan-out, no copy to the self device half, no
+            // receipt. The device behind the port executes it on its own side
+            // of the wire; the self device never resets here (the consumed
+            // return short-circuits the local handler, and a bridge reset is a
+            // later concern). An index that names no port is dropped silently.
+            if (kxid.args_len >= 2) {
+                uint_fast8_t index = kxid.args[1];
+                if (index < BRIDGE_MAX_PORTS && bridge_ports[index].in_use)
+                    bridge_forward_to_port(index, arb, frame, frame_len);
+            }
+            return 1;
+        }
+        if (kxid.args[0] == MUX_CMD_RESET_PORT) {
+            // A reset aimed at a port's line, not at a device on it
+            // ([0x04][index]): the bridge owns every port's electrical side,
+            // so this is the bridge's alone - consumed, never fanned out,
+            // never handed to the self device half. A port with no line-level
+            // reset (a NULL reset hook), or an index naming no port, is dropped
+            // in silence - the command carries no receipt.
+            if (kxid.args_len >= 2) {
+                uint_fast8_t index = kxid.args[1];
+                if (index < BRIDGE_MAX_PORTS && bridge_ports[index].in_use) {
+                    struct bridge_port *p = &bridge_ports[index];
+                    if (p->ops.reset)
+                        p->ops.reset(p->ops.ctx);
+                }
+            }
             return 1;
         }
         if (kxid.args[0] == MUX_CMD_SET_KLIPPER_NODEID

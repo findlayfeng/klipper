@@ -28,6 +28,7 @@
 #include "autoconf.h" // CONFIG_BRIDGE_PORT_SERIAL*, CONFIG_BRIDGE
 #include "bridge.h" // bridge_add_port, bridge_port_input
 #include "command.h" // MESSAGE_MAX, DECL_CONSTANT*
+#include "generic/misc.h" // timer_read_time, timer_is_before, timer_from_us
 #include "mux.h" // MUX_HEADER_BYTES
 #include "internal.h" // bridge_setup, bridge_poll
 
@@ -124,8 +125,65 @@ bridge_port_write(void *ctx, const uint8_t *data, size_t len)
     return 0;
 }
 
+// The router's reset hook: put the port's lines in their reset state and
+// schedule the release. Returns 0 once the pulse is started, -1 when the port
+// has no modem lines to drive (a pty, or an fd that refused the ioctl) - the
+// command carries no receipt, so the caller drops either result in silence.
+//
+// The pulse is a state machine driven from the task loop's poll, not a sleep:
+// the lines assert now, and the release happens when bridge_reset_poll() sees
+// the hold below expire against the loop's own clock. Nothing here blocks or
+// busy-waits the scheduler.
+//
+// The reset convention is the RS-232 one: asserting DTR (and RTS) drives the
+// lines that many MCUs strap to their reset input. A port whose device resets
+// differently is a different backend; the hold is the bounded 250ms the
+// protocol allows, and the reset layer (reset-only vs bootloader entry) is the
+// host's to choose later - this only pulses the line.
+#define BRIDGE_RESET_HOLD_US 250000
+static int bridge_reset_active;           // a reset pulse is in flight
+static uint32_t bridge_reset_restore_at;  // when the lines come back
+static int bridge_reset_saved;            // the modem bits to put back
+
+static int
+bridge_port_reset(void *ctx)
+{
+    (void)ctx;
+    if (bridge_fd < 0)
+        return -1;
+    int bits;
+    if (ioctl(bridge_fd, TIOCMGET, &bits) < 0)
+        return -1;               // no modem lines: a pty or similar
+    bridge_reset_saved = bits;
+    int out = bits | TIOCM_DTR | TIOCM_RTS;
+    if (ioctl(bridge_fd, TIOCMSET, &out) < 0)
+        return -1;
+    bridge_reset_restore_at =
+        timer_read_time() + timer_from_us(BRIDGE_RESET_HOLD_US);
+    bridge_reset_active = 1;
+    return 0;
+}
+
+// Release a reset pulse whose hold has run out. Called from the task loop's
+// poll (bridge_poll), so the hold costs the loop no sleeping: the lines simply
+// stay asserted until this sees the deadline past and puts them back.
+static void
+bridge_reset_poll(void)
+{
+    if (!bridge_reset_active)
+        return;
+    if (timer_is_before(timer_read_time(), bridge_reset_restore_at))
+        return;                   // still holding the port in reset
+    // The hold is over: put the lines back as they were. A port that is already
+    // gone has nothing to restore, so the flag clears either way.
+    int bits = bridge_reset_saved;
+    ioctl(bridge_fd, TIOCMSET, &bits);
+    bridge_reset_active = 0;
+}
+
 static const struct bridge_port_ops bridge_serial_ops = {
     .write = bridge_port_write,
+    .reset = bridge_port_reset,
 };
 
 // The port table this bridge reports in its identify dictionary: today the one
@@ -150,6 +208,7 @@ bridge_poll(void)
 {
     if (bridge_fd < 0 || bridge_port < 0)
         return;
+    bridge_reset_poll();
     bridge_flush();
     uint8_t buf[256];
     for (;;) {

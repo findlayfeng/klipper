@@ -40,14 +40,41 @@ int mux_is_reply_arb(uint32_t arb);
 #define MUX_CMD_SET_KLIPPER_NODEID 0x01
 #define MUX_RESP_NEED_NODEID 0x20
 
-// Beyond the two commands CAN spells, the family splits by who executes it.
+// Beyond the two commands CAN spells (QUERY_UNASSIGNED 0x00 and
+// SET_KLIPPER_NODEID 0x01 above), the family splits by who executes it. The
+// full command table, one row per command (payload after the `KXID` marker):
+//
+//   0x00 QUERY_UNASSIGNED   []                  every unassigned device answers
+//   0x01 SET_KLIPPER_NODEID [uuid][id]          the device `uuid` adopts `id`
+//   0x02 RESET_DEVICE       [index]             the device behind port `index`
+//                                               resets itself: a bridge routes
+//                                               it by `index` to that port and
+//                                               the device executes it; the
+//                                               device half also runs it on a
+//                                               board with no bridge (the index
+//                                               is then read no further)
+//   0x03 SET_PORT_NODEID    [index][id][flags]  the bridge builds its port
+//                                               tables; stays on the bridge,
+//                                               never forwarded
+//   0x04 RESET_PORT         [index]             the bridge pulses the lines of
+//                                               port `index` - the only reset a
+//                                               device with no admin channel of
+//                                               its own can get
+//
+// and one response:
+//
+//   0x20 NEED_NODEID        [uuid][app?]        an unassigned device's answer
+//                                               to a scan
+//
+// 0x02 names a device (routed by the bridge, executed by the device); 0x03 and
+// 0x04 name the bridge itself and never travel downstream. The three (0x02,
+// 0x03, 0x04) are addressed by the port index the identify dictionary reports;
+// a payload that is short or names no such port is dropped in silence, and none
+// of these carries a receipt.
+//
 // MUX_CMD_RESET_DEVICE is CAN's CANBUS_CMD_REQUEST_BOOTLOADER by value and
-// meaning: the device resets itself (defined here, handled nowhere yet). The
-// port-level commands are addressed to a bridge, not to a device, and name one
-// of its downstream ports by the index the identify dictionary reports:
-// MUX_CMD_SET_PORT_NODEID tells the bridge which device sits behind that port,
-// MUX_CMD_RESET_PORT asks the bridge for a line-level reset of it - the only
-// reset a device with no admin channel of its own can ever get.
+// meaning (generic/canserial.c): the device resets itself. The port-level
+// commands are addressed to a bridge, not to a device.
 #define MUX_CMD_RESET_DEVICE 0x02
 #define MUX_CMD_SET_PORT_NODEID 0x03
 #define MUX_CMD_RESET_PORT 0x04

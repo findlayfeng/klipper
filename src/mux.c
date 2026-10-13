@@ -344,7 +344,22 @@ mux_out_header(uint8_t *buf)
     return mux_encode_header(buf, mux_reply_arb_id(mux_assigned));
 }
 
-// One unit that arrived on the admin id: the assignment handshake, and the two
+// A RESET_DEVICE that reached this device: ask for the bootloader the way CAN's
+// CANBUS_CMD_REQUEST_BOOTLOADER does (generic/canserial.c). The command carries
+// a port index for a bridge to route by (mux.h MUX_CMD_RESET_DEVICE); on this
+// wire the routing has already named this device, so the index means nothing
+// here and is read no further. There is no uuid to check either - the port
+// index is the addressing - and a build with no bootloader simply does nothing,
+// the same no-op canserial.c makes without the config.
+static void
+mux_process_reset_device(void)
+{
+    if (!CONFIG_HAVE_BOOTLOADER_REQUEST)
+        return;
+    bootloader_request();
+}
+
+// One unit that arrived on the admin id: the assignment handshake, and the
 // commands an unassigned device answers.
 //
 // A device that has no node id answers the discovery broadcast with its
@@ -393,6 +408,13 @@ mux_admin_unit(uint8_t *frame, uint_fast8_t frame_len)
             // rule, spelled the same way (generic/canserial.c:can_id_conflict) -
             // give it up and say so, rather than answer for two boards.
             goto conflict;
+        return;
+    case MUX_CMD_RESET_DEVICE:
+        // CAN's CANBUS_CMD_REQUEST_BOOTLOADER by value and meaning: this device
+        // resets itself. The port index the command carries is a bridge's
+        // routing (see mux_process_reset_device above), so it is read no
+        // further here.
+        mux_process_reset_device();
         return;
     default:
         return;
