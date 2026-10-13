@@ -12,7 +12,8 @@
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
 #include <string.h> // memcpy, memcmp
-#include "autoconf.h" // CONFIG_MUX_SERIAL
+#include "autoconf.h" // CONFIG_MUX_SERIAL, CONFIG_BRIDGE
+#include "bridge.h" // bridge_admin_unit, bridge_route_unit
 #include "command.h" // MESSAGE_*, MESSAGE_SYNC
 #include "generic/misc.h" // crc16_ccitt
 #include "mux.h" // the mux unit format
@@ -411,6 +412,12 @@ static int
 mux_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
 {
     if (arb == MUX_ADMIN_LISTEN) {
+#if CONFIG_BRIDGE
+        // The bridge owns the other ports: an admin broadcast is theirs too, so
+        // it goes out before this device handles its own copy. Both are handed
+        // the frame unchanged.
+        bridge_admin_unit(arb, frame, frame_len);
+#endif
         mux_admin_unit(frame, frame_len);
         return MUX_UNIT_CONSUMED;
     }
@@ -419,6 +426,9 @@ mux_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
     // Anything else addresses a device this one is not. A bridge routes those to
     // its other ports (and a single-device port gets its header stripped);
     // without one there is nobody to hand the frame to, so it is dropped.
+#if CONFIG_BRIDGE
+    bridge_route_unit(arb, frame, frame_len);
+#endif
     return MUX_UNIT_CONSUMED;
 }
 

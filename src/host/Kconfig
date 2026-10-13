@@ -36,6 +36,24 @@ config HOST_FRAME_API
 
         The byte stream API stays available either way.
 
+config HOST_MUX_SERIAL
+    bool "Serial mux: address this library's console stream"
+    default n
+    select MUX_SERIAL
+    help
+        Makes the library's console stream speak the serial mux: the firmware
+        answers a scan with its identity, adopts the node id it is handed, and
+        gives its own frames the reply header. This is the device half alone -
+        the library is a board on a shared serial path, with no downstream port
+        and no routing.
+
+        On by itself for a host library used as one device on a shared stream;
+        HOST_BRIDGE_SERIAL is the superset (this plus the routing bridge and
+        its serial port) and the two may be enabled together.
+
+        Off by default: the library then speaks the plain, headerless wire
+        format.
+
 config HOST_BRIDGE_SERIAL
     bool "Bridge mode: add a serial port to the console"
     default n
@@ -48,8 +66,10 @@ config HOST_BRIDGE_SERIAL
         firmware also owns a serial port - another port on that console - and
         opens it during klipper_host_init().
 
-        Off by default: the library then talks only through the
-        klipper_host_*() API and opens no device.
+        The bridge routes each addressed unit to the port that owns its id and
+        fans the admin broadcasts out; this library's own klipper instance is
+        one of the ports. Off by default: the library then talks only through
+        the klipper_host_*() API and opens no device.
 
 config HOST_BRIDGE_SERIAL_PATH
     string "Serial port the bridge opens"

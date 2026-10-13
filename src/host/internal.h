@@ -18,4 +18,9 @@ void klipper_console_wake(void);
 // Returns 0 when the port is open, -1 when it cannot be brought up.
 int bridge_setup(void);
 
+// bridge.c - read the bridge's downstream port and feed it to the router. Called
+// from irq_wait() while the task loop is idle, the way src/linux/console.c
+// polls its tty from console_sleep().
+void bridge_poll(void);
+
 #endif // host/internal.h

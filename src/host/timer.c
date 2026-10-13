@@ -19,6 +19,7 @@
 #include "board/misc.h" // timer_read_time, timer_kick
 #include "board/timer_irq.h" // timer_dispatch_many
 #include "sched.h" // DECL_INIT
+#include "internal.h" // bridge_poll
 
 #define NSECS 1000000000ULL
 #define NSECS_PER_TICK (NSECS / CONFIG_CLOCK_FREQ)
@@ -147,6 +148,11 @@ irq_wait(void)
         ppoll(NULL, 0, &ts, &TimerState.ss_timer);
     }
     irq_poll();
+#if CONFIG_BRIDGE && CONFIG_BRIDGE_PORT_SERIAL
+    // The bridge's downstream port is one more source of input; poll it on the
+    // same beat, while the loop has nothing else to do.
+    bridge_poll();
+#endif
 }
 
 // Check if a timer interrupt is pending

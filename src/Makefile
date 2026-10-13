@@ -4,6 +4,8 @@ src-y += sched.c command.c basecmd.c debugcmds.c
 
 # Serial mux: the unit format a shared byte stream carries (MUX_SERIAL).
 src-$(CONFIG_MUX_SERIAL) += mux.c
+# Bridge: the router between the console's ports (BRIDGE).
+src-$(CONFIG_BRIDGE) += bridge.c
 src-$(CONFIG_HAVE_GPIO) += initial_pins.c gpiocmds.c stepper.c endstop.c \
     trsync.c
 src-$(CONFIG_WANT_ADC) += adccmds.c

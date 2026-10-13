@@ -7,12 +7,10 @@
 // tty during klipper_host_init() and puts it in the raw mode the protocol
 // needs.
 //
-// Feeding the port into the console - a reader and a writer in front of
-// console_sendf()/console_receive_buffer() - is the next step, together with
-// the device half (being addressed, answering the scan/admin channel, and the
-// identity the host assigns) in the common layer.
-// The port is opened non-blocking, so whoever reads it later can poll it next
-// to the console's other work instead of blocking a thread on it, the way
+// Feeding the port into the console is bridge.c's job (the router): this file
+// opens the tty, registers it as a downstream port, and polls it from the task
+// loop's sleep (bridge_poll, called by irq_wait) so its bytes reach the router
+// next to the console's other work instead of blocking a thread on it, the way
 // src/linux/console.c polls its tty.
 //
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
@@ -27,8 +25,11 @@
 #include <string.h> // strerror
 #include <sys/ioctl.h> // ioctl
 #include <unistd.h> // close
-#include "autoconf.h" // CONFIG_BRIDGE_PORT_SERIAL*
-#include "internal.h" // bridge_setup
+#include "autoconf.h" // CONFIG_BRIDGE_PORT_SERIAL*, CONFIG_BRIDGE
+#include "bridge.h" // bridge_add_port, bridge_port_input
+#include "command.h" // MESSAGE_MAX
+#include "mux.h" // MUX_HEADER_BYTES
+#include "internal.h" // bridge_setup, bridge_poll
 
 // The bridge's serial port, or -1 when it has not been opened.
 static int bridge_fd = -1;
@@ -81,6 +82,79 @@ set_raw_mode(int fd, unsigned int baud)
     return 0;
 }
 
+#if CONFIG_BRIDGE
+// The router's end of the port. bridge.c hands each unit over as one blob and
+// this holds it until the device can take it, so a unit is written whole and a
+// later one never cuts in front of it.
+static uint8_t bridge_tx[2 * (MUX_HEADER_BYTES + MESSAGE_MAX)];
+static size_t bridge_tx_len;
+static int bridge_port = -1;
+
+// Push as much of the queued output at the port as the (non-blocking) fd takes.
+static void
+bridge_flush(void)
+{
+    while (bridge_tx_len) {
+        ssize_t n = write(bridge_fd, bridge_tx, bridge_tx_len);
+        if (n > 0) {
+            memmove(bridge_tx, &bridge_tx[n], bridge_tx_len - n);
+            bridge_tx_len -= n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;              // the device will get it on the next task
+        bridge_errno("write");
+        bridge_tx_len = 0;       // the port is gone: nothing more can be sent
+        return;
+    }
+}
+
+// The router's write hook: queue one whole blob, then give the port a chance.
+static int
+bridge_port_write(void *ctx, const uint8_t *data, size_t len)
+{
+    (void)ctx;
+    if (len > sizeof(bridge_tx) - bridge_tx_len)
+        return -1;
+    memcpy(&bridge_tx[bridge_tx_len], data, len);
+    bridge_tx_len += len;
+    bridge_flush();
+    return 0;
+}
+
+static const struct bridge_port_ops bridge_serial_ops = {
+    .write = bridge_port_write,
+};
+
+// Read whatever the downstream device has sent and hand it to the router.
+//
+// This runs from inside the task loop's sleep (irq_wait), where the host
+// emulation already yields for a millisecond: the fd is non-blocking, so the
+// port is polled next to the console's other work instead of blocking a thread
+// on it, the way src/linux/console.c polls its tty. Reading until the port is
+// empty keeps a burst from waiting on the next sleep.
+void
+bridge_poll(void)
+{
+    if (bridge_fd < 0 || bridge_port < 0)
+        return;
+    bridge_flush();
+    uint8_t buf[256];
+    for (;;) {
+        ssize_t n = read(bridge_fd, buf, sizeof(buf));
+        if (n > 0) {
+            bridge_port_input(bridge_port, buf, n);
+            continue;
+        }
+        if (n < 0 && errno == EINTR)
+            continue;
+        break;                   // EAGAIN, or the port is gone
+    }
+}
+#endif // CONFIG_BRIDGE
+
 // Open the bridge's serial port. Called once from klipper_host_init(); returns
 // 0 when the port is ready, -1 when it cannot be brought up.
 //
@@ -101,6 +175,10 @@ bridge_setup(void)
         return -1;
     }
     bridge_fd = fd;
+#if CONFIG_BRIDGE
+    // The bridge's first downstream port: this tty, with one device on it.
+    bridge_port = bridge_add_port(&bridge_serial_ops, 1);
+#endif
     fprintf(stderr, "bridge serial: %s open at %u baud (fd %d)\n", path,
             (unsigned int)CONFIG_BRIDGE_PORT_SERIAL_BAUD, fd);
     return 0;
