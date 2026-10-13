@@ -87,6 +87,7 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 | `BRIDGE_PORT_SERIAL` | `src/Kconfig`（公共） | 桥有串口下游端口 | — |
 | `BRIDGE_PORT_SERIAL_BAUD` | `src/Kconfig`（公共） | 该端口速率（写法同 `SERIAL_BAUD`） | `250000` |
 | `HOST_BRIDGE_SERIAL` | `src/host/Kconfig` | host 上的可见开关，`select BRIDGE`/`BRIDGE_PORT_SERIAL`/`MUX_SERIAL` | `n` |
+| `HOST_MUX_SERIAL` | `src/host/Kconfig` | 只说 mux、**没有**下游端口的 host：`select MUX_SERIAL`，与上面那个并存不冲突 | `n` |
 | `HOST_BRIDGE_SERIAL_PATH` | `src/host/Kconfig` | 打开的 tty 路径 | `/dev/ttyACM0` |
 
 架构只回答"桥的是哪个端口"：host 没有固定端口表，所以是**路径字符串**（默认
@@ -94,7 +95,7 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 （`AVR_SERIAL_UART*` / `STM32_SERIAL_USART*` 那种）。`MUX_CAN` / `BRIDGE_PORT_CAN`
 （CAN 也是端口，见 `src/Kconfig` 注释）随 CAN 后端一起落地。
 
-本步实现到**打开并持有 fd** 为止：
+已经实现的是**整条链路**——打开端口、把端口接进控制台、按 id 路由：
 
 - 打开时机是 `klipper_host_init()`，一个库一次；端口**非阻塞**打开
   （`O_RDWR|O_NOCTTY|O_NONBLOCK|O_CLOEXEC`），将来与其它工作一起 poll，做法同
@@ -111,8 +112,23 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
   **首字节高位置位 = 带头单元**（admin 就地处理；自己的单元**剥掉 2 字节头**后仍由
   `command_find_and_dispatch` 处理），**否则 = 原始帧**（旧线上格式照旧）。已采纳 id 后，
   自己发出的帧会带上应答头（`mux_out_header`），所以字节流与 unit 接口看到的是同一串单元。
-- 桥的**下游端口接线与路由**（`CONFIG_BRIDGE`：把下游端口的收发接进这条链路、`id ↔ 端口`
-  路由表与扇出）尚未实现，属下一步。
+- **桥半已实现**（公共 `src/bridge.c`/`bridge.h`，`CONFIG_BRIDGE`）：
+  - **端口表**：`bridge_add_port(ops, single_device)` 登记端口，host 侧把已打开的 tty 登记为
+    **单设备**下游端口（`src/host/bridge.c`），读写整单元、按需 flush。
+  - **两张路由表**：`uuid → 端口`（从下游上来的 `NEED_NODEID` 答里按帧长字节定位读 uuid，
+    记住它从哪个端口来）与 `id → 端口`（上游 `SET_KLIPPER_NODEID(uuid,id)` 转发下去后记录；
+    该 uuid 未知时先向下游补发一枚 `QUERY_UNASSIGNED` 探一次，带界）。一个端口可挂多个 id。
+  - **admin 扇出**：上游的 `0x3f0` 单元（含 2 字节头）**原样**转给所有下游端口；
+    下游的 `0x3f1` 答**逐条原样**转回上游——**不合并、不去重**（去重是主机的事），
+    每个单元原子写出、不与其它端口交错。
+  - **数据单元**按 `id → 端口` 转发；目标端口是**单设备**路径时**剥掉 2 字节头**再发原始帧，
+    从单设备端口收到的**原始帧**按该端口的 id **加上应答方向（+1）的头**转回上游。
+  - 设备半的**重新确认握手**是**按 id 寻址**的（`KXID` 空体伪帧，头部是 `arb(id)`），设备在
+    `arb(id)` 上认出它并回 `assignment_reply`——命令走 admin id，握手走 id，两者别混。
+- **host 侧读端口的时机**：`bridge_poll()` 插在任务循环的睡眠处（`src/host/timer.c` 的
+  `irq_wait()`，做法同 `src/linux/console.c` 的 `console_sleep()`）——不新起线程，端口与
+  控制台的其它工作一起被轮询。
+- **今天只有一条下游端口**：端口表支持多条，但多端口扇出与归属尚未被测试过。
 
 **两个缓冲区都是有限的（各 4096 字节起步），并且两条路径都不会弄丢半条消息**：
 
