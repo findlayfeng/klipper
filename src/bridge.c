@@ -16,7 +16,9 @@
 //                  so a uuid that contains 0x7e is ordinary content.
 //   id   -> port   learned from an upstream SET_KLIPPER_NODEID, which the
 //                  bridge forwards downstream and remembers by looking the
-//                  uuid up. One port may hold many ids.
+//                  uuid up, and from the port-level SET_PORT_NODEID, which
+//                  names the port outright - the route a device with no admin
+//                  channel of its own gets. One port may hold many ids.
 //
 // The assignment has no acknowledgement in the protocol, so nothing here waits
 // for one and nothing here invents one. If an assignment names a uuid whose
@@ -31,6 +33,11 @@
 // header of the id that path was assigned. A headed unit coming up is forwarded
 // unchanged: the port it arrived on is what a unit is attributed to, never a
 // guess from the id in its header.
+//
+// Whether a port's device speaks units is the host's to say, in the flags of
+// the port-level SET_PORT_NODEID (mux.h); a port that has not been told - or
+// whose device was told it does not - is legacy, and the strip/head rule below
+// is what keeps the wire format of a device that predates the mux working.
 //
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
 //
@@ -55,9 +62,14 @@
 // room to spare, so a partial one always fits.
 struct bridge_port {
     struct bridge_port_ops ops;
-    int single_device;
-    // The node id of the device on a single-device path: a raw frame it sends
-    // is forwarded upstream under this id's reply header. 0 until assigned.
+    // The port's MUX_PORT_* flags (mux.h): MUX_PORT_UNITS set when the device
+    // behind it speaks units and the port forwards them unchanged, clear for a
+    // legacy device (the port strips the header down and heads raw frames up).
+    // Cleared at registration; the host sets them per port with the port-level
+    // SET_PORT_NODEID.
+    uint8_t flags;
+    // The node id of the device on a legacy port: a raw frame it sends is
+    // forwarded upstream under this id's reply header. 0 until assigned.
     uint32_t node_id;
     int in_use;
     uint8_t in[2 * (MUX_HEADER_BYTES + MESSAGE_MAX)];
@@ -123,7 +135,9 @@ bridge_map_id(uint32_t nodeid, int port)
     if (nodeid < 1 || nodeid > MUX_MAX_NODE_ID)
         return;
     bridge_id_port[nodeid] = port + 1;
-    if (bridge_ports[port].single_device)
+    if (!(bridge_ports[port].flags & MUX_PORT_UNITS))
+        // A legacy port speaks for the one device behind it, so the id is also
+        // what its raw frames are headed with on the way up.
         bridge_ports[port].node_id = nodeid;
 }
 
@@ -158,6 +172,28 @@ bridge_apply_pending(const uint8_t *uuid, int port)
         bridge_map_id(bridge_pending[i].nodeid, port);
         bridge_pending[i] = bridge_pending[--bridge_pending_count];
     }
+}
+
+// A port-level SET_PORT_NODEID: the host telling the bridge which device sits
+// behind which port, and whether that device speaks units. This is the route a
+// device gets without participating at all - it is answered by the tables
+// alone: no receipt, no copy downstream, and a repeat simply writes the same
+// values again. Anything that names no port the bridge has, or an id the wire
+// cannot address, is dropped in silence.
+static void
+bridge_set_port_nodeid(const uint8_t *args, uint_fast8_t args_len)
+{
+    if (args_len < MUX_SET_PORT_NODEID_LEN)
+        return;
+    uint_fast8_t index = args[1];
+    uint32_t nodeid = args[2];
+    uint8_t flags = args[3];
+    if (index >= BRIDGE_MAX_PORTS || !bridge_ports[index].in_use)
+        return;
+    if (!mux_arb_id(nodeid))
+        return;
+    bridge_ports[index].flags = flags & MUX_PORT_UNITS;
+    bridge_map_id(nodeid, index);
 }
 
 
@@ -222,13 +258,13 @@ bridge_port_drop(struct bridge_port *p, size_t n)
     p->in_len -= n;
 }
 
-// A raw frame came up from a single-device path: head it with the reply id of
-// the id that path was assigned. Without one there is no address to send it
-// under, so it is dropped.
+// A raw frame came up from a legacy path: head it with the reply id of the id
+// that path was assigned. Without one there is no address to send it under, so
+// it is dropped.
 static void
 bridge_port_raw_up(struct bridge_port *p, uint_fast8_t frame_len)
 {
-    if (!p->single_device || !p->node_id)
+    if ((p->flags & MUX_PORT_UNITS) || !p->node_id)
         return;
     uint8_t unit[MUX_HEADER_BYTES + MESSAGE_MAX];
     uint_fast8_t header = mux_encode_header(unit, mux_reply_arb_id(p->node_id));
@@ -321,14 +357,16 @@ bridge_port_scan(int index)
  ****************************************************************/
 
 int
-bridge_add_port(const struct bridge_port_ops *ops, int single_device)
+bridge_add_port(const struct bridge_port_ops *ops)
 {
     int i;
     for (i = 0; i < BRIDGE_MAX_PORTS; i++) {
         if (bridge_ports[i].in_use)
             continue;
         bridge_ports[i].ops = *ops;
-        bridge_ports[i].single_device = single_device;
+        // No flags: the port starts legacy, and the host names what is behind
+        // it with the port-level SET_PORT_NODEID.
+        bridge_ports[i].flags = 0;
         bridge_ports[i].in_use = 1;
         return i;
     }
@@ -358,25 +396,34 @@ bridge_port_input(int port, const uint8_t *data, size_t len)
     }
 }
 
-void
+int
 bridge_admin_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
 {
     // An assignment is also the moment to learn which port owns the id; a
     // unit for the local device itself is not a downstream port's business.
     struct mux_kxid kxid;
-    if (mux_parse_kxid(frame, frame_len, &kxid) && kxid.args_len
-        && kxid.args[0] == MUX_CMD_SET_KLIPPER_NODEID
-        && kxid.args_len >= 1 + MUX_UUID_LEN + 1) {
-        const uint8_t *uuid = &kxid.args[1];
-        uint32_t nodeid = kxid.args[1 + MUX_UUID_LEN];
-        if (nodeid && memcmp(uuid, mux_uuid(), MUX_UUID_LEN))
-            bridge_learn_assignment(uuid, nodeid);
+    if (mux_parse_kxid(frame, frame_len, &kxid) && kxid.args_len) {
+        if (kxid.args[0] == MUX_CMD_SET_PORT_NODEID) {
+            // A port-level command: the bridge's own business. It is answered
+            // by the tables alone and stays on this side of the wire - it
+            // never reaches a downstream port or the local device half.
+            bridge_set_port_nodeid(kxid.args, kxid.args_len);
+            return 1;
+        }
+        if (kxid.args[0] == MUX_CMD_SET_KLIPPER_NODEID
+            && kxid.args_len >= 1 + MUX_UUID_LEN + 1) {
+            const uint8_t *uuid = &kxid.args[1];
+            uint32_t nodeid = kxid.args[1 + MUX_UUID_LEN];
+            if (nodeid && memcmp(uuid, mux_uuid(), MUX_UUID_LEN))
+                bridge_learn_assignment(uuid, nodeid);
+        }
     }
     // Every admin broadcast reaches every downstream port, header and all.
     int i;
     for (i = 0; i < BRIDGE_MAX_PORTS; i++)
         if (bridge_ports[i].in_use)
             bridge_write_unit(&bridge_ports[i], arb, frame, frame_len);
+    return 0;
 }
 
 void
@@ -389,9 +436,9 @@ bridge_route_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
     if (!slot)
         return;                        // no port owns this id: nothing to route
     struct bridge_port *p = &bridge_ports[slot - 1];
-    if (p->single_device) {
-        // One device on the path: its frame goes out without the header the
-        // exclusive wire format has no use for.
+    if (!(p->flags & MUX_PORT_UNITS)) {
+        // A legacy port has the one device that predates the mux behind it: its
+        // frame goes out without the header that wire format has no use for.
         p->ops.write(p->ops.ctx, frame, frame_len);
         return;
     }

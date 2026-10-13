@@ -34,11 +34,14 @@ struct bridge_port_ops {
     void *ctx;
 };
 
-// Register a downstream port. 'single_device' says the path carries exactly one
-// device: a unit is then stripped to its frame on the way down, and a raw frame
-// is given the reply header of the port's id on the way up. Returns a
-// non-negative port index, or -1 when there is no room.
-int bridge_add_port(const struct bridge_port_ops *ops, int single_device);
+// Register a downstream port, with no flags set: a legacy port, whose device
+// speaks raw frames - a unit is stripped to its frame on the way down, and a
+// raw frame is given the reply header of the port's id on the way up. What a
+// port's device actually speaks is the host's call, not a build time one: it
+// sets MUX_PORT_UNITS per port with the port-level SET_PORT_NODEID once it
+// knows what is behind the port. Returns a non-negative port index, or -1 when
+// there is no room.
+int bridge_add_port(const struct bridge_port_ops *ops);
 
 // Feed bytes read from downstream port 'port' into the router. Whole units and
 // frames are forwarded upstream as they arrive; a partial one is buffered until
@@ -46,8 +49,12 @@ int bridge_add_port(const struct bridge_port_ops *ops, int single_device);
 void bridge_port_input(int port, const uint8_t *data, size_t len);
 
 // The two points where the upstream loop consults the router. Neither exists on
-// a build without CONFIG_BRIDGE.
-void bridge_admin_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len);
+// a build without CONFIG_BRIDGE. bridge_admin_unit() answers whether the unit
+// was consumed: 1 for a port-level command the bridge handles on its own (and
+// which therefore never reaches the downstream ports or the local device
+// half), 0 for everything the bridge only remembers from and fans out - which
+// is what the caller's own admin handler still has to look at.
+int bridge_admin_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len);
 void bridge_route_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len);
 
 #endif // __BRIDGE_H

@@ -27,7 +27,7 @@
 #include <unistd.h> // close
 #include "autoconf.h" // CONFIG_BRIDGE_PORT_SERIAL*, CONFIG_BRIDGE
 #include "bridge.h" // bridge_add_port, bridge_port_input
-#include "command.h" // MESSAGE_MAX
+#include "command.h" // MESSAGE_MAX, DECL_CONSTANT*
 #include "mux.h" // MUX_HEADER_BYTES
 #include "internal.h" // bridge_setup, bridge_poll
 
@@ -128,6 +128,16 @@ static const struct bridge_port_ops bridge_serial_ops = {
     .write = bridge_port_write,
 };
 
+// The port table this bridge reports in its identify dictionary: today the one
+// serial port above, named "uart0" - the oid the host config refers to the port
+// by. The name belongs to the firmware (the host must never guess it), and the
+// index its row carries (0 here) is what the port-level SET_PORT_NODEID travels
+// with, so this table is how the host learns it.
+DECL_CONSTANT("BRIDGE_PORT_COUNT", 1);
+DECL_CONSTANT_STR("BRIDGE_PORT0_NAME", "uart0");
+DECL_CONSTANT_STR("BRIDGE_PORT0_TYPE", "uart");
+DECL_CONSTANT_STR("BRIDGE_PORT0_PATH", CONFIG_HOST_BRIDGE_SERIAL_PATH);
+
 // Read whatever the downstream device has sent and hand it to the router.
 //
 // This runs from inside the task loop's sleep (irq_wait), where the host
@@ -176,8 +186,11 @@ bridge_setup(void)
     }
     bridge_fd = fd;
 #if CONFIG_BRIDGE
-    // The bridge's first downstream port: this tty, with one device on it.
-    bridge_port = bridge_add_port(&bridge_serial_ops, 1);
+    // The bridge's first downstream port: this tty. It registers with no flags
+    // - a legacy port until the host says what is behind it, which it does with
+    // the port-level SET_PORT_NODEID once it knows (the table above is what
+    // tells it which index this port answers to).
+    bridge_port = bridge_add_port(&bridge_serial_ops);
 #endif
     fprintf(stderr, "bridge serial: %s open at %u baud (fd %d)\n", path,
             (unsigned int)CONFIG_BRIDGE_PORT_SERIAL_BAUD, fd);

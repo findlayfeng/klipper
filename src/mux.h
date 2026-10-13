@@ -40,6 +40,35 @@ int mux_is_reply_arb(uint32_t arb);
 #define MUX_CMD_SET_KLIPPER_NODEID 0x01
 #define MUX_RESP_NEED_NODEID 0x20
 
+// Beyond the two commands CAN spells, the family splits by who executes it.
+// MUX_CMD_RESET_DEVICE is CAN's CANBUS_CMD_REQUEST_BOOTLOADER by value and
+// meaning: the device resets itself (defined here, handled nowhere yet). The
+// port-level commands are addressed to a bridge, not to a device, and name one
+// of its downstream ports by the index the identify dictionary reports:
+// MUX_CMD_SET_PORT_NODEID tells the bridge which device sits behind that port,
+// MUX_CMD_RESET_PORT asks the bridge for a line-level reset of it - the only
+// reset a device with no admin channel of its own can ever get.
+#define MUX_CMD_RESET_DEVICE 0x02
+#define MUX_CMD_SET_PORT_NODEID 0x03
+#define MUX_CMD_RESET_PORT 0x04
+
+// SET_PORT_NODEID's payload is four bytes: [0x03][index][id][flags]. `index` is
+// a 0-based port index (a port the port table does not list is dropped), `id`
+// is the node id of the device on that port (an id the wire cannot address,
+// mux_arb_id() answering 0 for it, is dropped), and `flags` says how that
+// port's device speaks - the reserved bits are ignored. The command builds the
+// bridge's own tables and nothing else: no receipt, no copy downstream, and a
+// repeat simply writes the same values again.
+#define MUX_SET_PORT_NODEID_LEN 4
+
+// A port's flags, from SET_PORT_NODEID: whether the device on it speaks the
+// unit format. Set, the port forwards units both ways unchanged; clear, it
+// strips the header off a unit going down and heads a raw frame coming up with
+// the reply id it was given - the wire format of a device that predates the
+// mux. Whether a port's device speaks units is the host's call, not a build
+// time one: nothing here is compiled in per port.
+#define MUX_PORT_UNITS 0x01
+
 // A uuid is six bytes, most significant first.
 #define MUX_UUID_LEN 6
 

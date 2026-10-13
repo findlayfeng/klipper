@@ -415,8 +415,12 @@ mux_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
 #if CONFIG_BRIDGE
         // The bridge owns the other ports: an admin broadcast is theirs too, so
         // it goes out before this device handles its own copy. Both are handed
-        // the frame unchanged.
-        bridge_admin_unit(arb, frame, frame_len);
+        // the frame unchanged. A port-level command (SET_PORT_NODEID) names a
+        // port of the bridge rather than this device, so it is the bridge's
+        // alone: once it says so, this device's own handler has nothing to do
+        // with the frame.
+        if (bridge_admin_unit(arb, frame, frame_len))
+            return MUX_UNIT_CONSUMED;
 #endif
         mux_admin_unit(frame, frame_len);
         return MUX_UNIT_CONSUMED;
