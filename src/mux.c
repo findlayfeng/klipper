@@ -1,11 +1,11 @@
 // The serial mux: unit headers, the `KXID` pseudo-frame and the admin units
 //
 // The device half of the serial mux (see mux.h for what a unit is and where the
-// specification lives). This file owns the encoding and decoding: the checked
-// two-byte header, the pseudo-frame every admin command rides, and the units
-// the admin channel carries. The state machine that uses them - answering the
-// discovery broadcast, adopting the node id it is handed, and the id-collision
-// rule - is the next piece, together with the local parser's byte stream.
+// specification lives). This file owns the encoding and decoding - the checked
+// two-byte header, the pseudo-frame every admin command rides, and the units the
+// admin channel carries - and the device half that uses them: the identity and
+// node id a device answers with, the admin channel it replies on, the
+// id-collision rule, and the in-place resolution of an incoming stream.
 //
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
 //

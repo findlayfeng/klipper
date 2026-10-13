@@ -81,10 +81,10 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 
 | 选项 | 位置 | 含义 | 默认 |
 |------|------|------|------|
-| `MUX` | `src/Kconfig`（公共、隐藏） | **设备半**：能被寻址、应答扫描/admin、采纳 nodeid、碰撞规则（逐字对照 CAN 的 `can_id_conflict`） | — |
-| `MUX_SERIAL` | `src/Kconfig`（公共） | 设备半跑在串口/字节流上 | — |
-| `BRIDGE` | `src/Kconfig`（公共、隐藏） | **桥半**：端口表 + 路由 + 扇出（`select MUX`） | — |
-| `BRIDGE_PORT_SERIAL` | `src/Kconfig`（公共） | 桥有串口下游端口 | — |
+| `MUX` | `src/Kconfig`（公共；无 prompt） | **设备半**：能被寻址、应答扫描/admin、采纳 nodeid、碰撞规则（逐字对照 CAN 的 `can_id_conflict`） | — |
+| `MUX_SERIAL` | `src/Kconfig`（公共；无 prompt） | 设备半跑在串口/字节流上 | — |
+| `BRIDGE` | `src/Kconfig`（公共；无 prompt） | **桥半**：端口表 + 路由 + 扇出（`select MUX`） | — |
+| `BRIDGE_PORT_SERIAL` | `src/Kconfig`（公共；无 prompt） | 桥有串口下游端口 | — |
 | `BRIDGE_PORT_SERIAL_BAUD` | `src/Kconfig`（公共） | 该端口速率（写法同 `SERIAL_BAUD`） | `250000` |
 | `HOST_BRIDGE_SERIAL` | `src/host/Kconfig` | host 上的可见开关，`select BRIDGE`/`BRIDGE_PORT_SERIAL`/`MUX_SERIAL` | `n` |
 | `HOST_MUX_SERIAL` | `src/host/Kconfig` | 只说 mux、**没有**下游端口的 host：`select MUX_SERIAL`，与上面那个并存不冲突 | `n` |
@@ -105,7 +105,7 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
   `bridge serial: /dev/ttyACM0 failed: (2)No such file or directory`。
 - 只有 `CONFIG_BRIDGE_PORT_SERIAL=y` 才编 `bridge.c`；默认（`=n`）根本不参与构建，
   宿主 API 的行为一个字节都不变。
-- **身份由主机指派**：MUX 按身份寻址，而库是主机加载的文件、自己没有可派生的东西（按路径派生还可能与其他设备撞车），所以身份由主机在 `init` 前用 `klipper_host_set_uuid()` 给出，不调就是全 `0`。已实现：存储 + `init` 时报一行 `mux uuid: <12 位十六进制>`；消费它的 MUX 设备半（应答扫描/admin、采纳 nodeid、碰撞规则）是下一步。
+- **身份由主机指派**：MUX 按身份寻址，而库是主机加载的文件、自己没有可派生的东西（按路径派生还可能与其他设备撞车），所以身份由主机在 `init` 前用 `klipper_host_set_uuid()` 给出，不调就是全 `0`。已实现：存储 + `init` 时报一行 `mux uuid: <12 位十六进制>`；消费它的 MUX 设备半与桥半见下两节。
 - **设备半已实现**（固件 `src/mux.c`）：未分配时答 `0x00` 扫描（`0x3f1` 上带自己的 uuid）、
   按 `0x01 <uuid> <id>` 采纳 node id（幂等）、别人的 uuid 被指派到已持有的 id 时照 CAN 的
   `can_id_conflict` 弃号并 `shutdown`；输入侧 `mux_input()` 在控制台任务里就地解析——
