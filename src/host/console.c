@@ -40,9 +40,12 @@
 #include "sched.h" // sched_wake_task, DECL_TASK, DECL_SHUTDOWN
 #include "internal.h" // klipper_console_unlock
 #include "klipper_host.h" // klipper_host_input, klipper_host_output
+#include "mux.h" // mux_decode_header, MUX_HEADER_BYTES
 
 // A frame is at most MESSAGE_MAX bytes, trailer included
+// One message block, and one mux unit (its header plus the block behind it).
 #define FRAME_MAX MESSAGE_MAX
+#define UNIT_MAX (MUX_HEADER_BYTES + FRAME_MAX)
 
 // The transmit buffer starts at the size of the firmware's own receive buffer
 // and grows while the host is behind, because the alternative - stalling klipper
@@ -286,9 +289,16 @@ klipper_host_output_frame(uint8_t *buf, size_t buf_size, uint32_t timeout_ms)
         pthread_cond_timedwait(&tx_cond, &tx_mutex, &deadline);
     }
 
-    size_t n = end ? end - tx_pos : 0;
-    if (n)
-        memcpy(buf, &tx_buf[tx_pos], n);
+    // Nothing found means the buffer starts with something this call does not
+    // hand over (a partial frame, or a unit while only plain frames are asked
+    // for): leave the buffer exactly as it is, so the caller can read it with
+    // the other view instead.
+    if (!end) {
+        pthread_mutex_unlock(&tx_mutex);
+        return 0;
+    }
+    size_t n = end - tx_pos;
+    memcpy(buf, &tx_buf[tx_pos], n);
     tx_pos = end;
     if (tx_pos == tx_max)
         tx_pos = tx_max = 0;
@@ -300,6 +310,104 @@ klipper_host_output_frame(uint8_t *buf, size_t buf_size, uint32_t timeout_ms)
     return n;
 }
 #endif // CONFIG_HOST_FRAME_API
+
+// The unit API: the same framed handover, one mux unit (header plus frame) at a
+// time. It shares the frame API's switch and needs bridge mode as well, because
+// only a bridge sends units upstream - without one there are no headers for a
+// unit to carry.
+//
+// The byte stream API is not replaced by this: it stays the one that always
+// exists (klipper_host_input / klipper_host_output_wait) and the one the
+// assignment conversation runs on. Both are views of the same buffers, so a
+// caller picking one of them must keep using it.
+#if CONFIG_HOST_FRAME_API && CONFIG_BRIDGE && CONFIG_MUX_SERIAL
+// Retrieve one complete unit, waiting for it if needed.
+//
+// The header names the device the frame came from, so a host that speaks the
+// mux does not have to reassemble anything - the same service
+// klipper_host_output_frame() does for plain frames, with the addressing kept.
+//
+// buf_size must be at least UNIT_MAX: a unit that does not fit is not split
+// further - the call reports nothing and leaves the buffer alone.
+size_t
+klipper_host_output_unit(uint8_t *buf, size_t buf_size, uint32_t timeout_ms)
+{
+    if (!buf || buf_size < UNIT_MAX)
+        return 0;
+
+    pthread_mutex_lock(&tx_mutex);
+    size_t end = 0;
+    struct timespec deadline;
+    int waiting = timeout_ms != 0;
+    if (waiting) {
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        add_ms(&deadline, timeout_ms);
+    }
+    for (;;) {
+        size_t avail = tx_max - tx_pos;
+        uint32_t arb;
+        uint_fast8_t consumed;
+        if (avail > MUX_HEADER_BYTES
+            && mux_decode_header(&tx_buf[tx_pos], MUX_HEADER_BYTES
+                                 , &arb, &consumed) == MUX_HEADER_COMPLETE) {
+            uint8_t msglen = tx_buf[tx_pos + consumed];
+            if (msglen >= MESSAGE_MIN && msglen <= MESSAGE_MAX
+                && avail >= consumed + msglen) {
+                end = tx_pos + consumed + msglen;
+                break;
+            }
+        }
+        if (!waiting || !ms_left(&deadline))
+            break;
+        pthread_cond_timedwait(&tx_cond, &tx_mutex, &deadline);
+    }
+
+    // Nothing found means the buffer starts with something this call does not
+    // hand over (a partial frame, or a unit while only plain frames are asked
+    // for): leave the buffer exactly as it is, so the caller can read it with
+    // the other view instead.
+    if (!end) {
+        pthread_mutex_unlock(&tx_mutex);
+        return 0;
+    }
+    size_t n = end - tx_pos;
+    memcpy(buf, &tx_buf[tx_pos], n);
+    tx_pos = end;
+    if (tx_pos == tx_max)
+        tx_pos = tx_max = 0;
+    pthread_mutex_unlock(&tx_mutex);
+
+    // Reading freed room for a writer that was waiting for it.
+    if (n)
+        pthread_cond_broadcast(&tx_cond);
+    return n;
+}
+
+// Feed one complete unit: the mux header and the frame behind it.
+//
+// The caller knows it holds exactly one unit, so it does not have to be a byte
+// stream - but half a unit is refused rather than taken, because the mux finds
+// its units by the two-byte boundary the header defines and a truncated one
+// would desynchronise that parse. Returns len when the unit was taken, 0 when
+// nothing was (the caller may retry it).
+ssize_t
+klipper_host_input_unit(const uint8_t *unit, size_t len)
+{
+    if (!unit || len < MUX_HEADER_BYTES + MESSAGE_MIN
+        || len > MUX_HEADER_BYTES + MESSAGE_MAX)
+        return 0;
+    uint32_t arb;
+    uint_fast8_t consumed;
+    if (mux_decode_header(unit, MUX_HEADER_BYTES, &arb, &consumed)
+        != MUX_HEADER_COMPLETE)
+        return 0;
+    uint8_t msglen = unit[consumed];
+    if (msglen < MESSAGE_MIN || msglen > MESSAGE_MAX
+        || consumed + (size_t)msglen != len)
+        return 0;
+    return klipper_host_input(unit, len);
+}
+#endif // CONFIG_HOST_FRAME_API && CONFIG_BRIDGE && CONFIG_MUX_SERIAL
 
 // Parse and dispatch complete message blocks from the receive buffer.
 // Runs in the klipper task loop; holds rx_mutex while dispatching so

@@ -125,6 +125,44 @@ size_t klipper_host_output_frame(uint8_t *buf, size_t buf_size,
 #endif
 
 /**
+ * Feed one complete mux unit: the frame header and the frame behind it.
+ *
+ * Only present when the library was built with CONFIG_HOST_FRAME_API *and*
+ * bridge mode (CONFIG_BRIDGE), because only a bridge sends units upstream. It
+ * is the framed counterpart of klipper_host_input(): the caller hands over
+ * exactly one unit it already holds, instead of a byte stream. Half a unit is
+ * refused rather than taken, because the mux finds its units by the header's
+ * two-byte boundary and a truncated one would desynchronise that parse.
+ *
+ * The byte stream API stays available either way, and is the one the
+ * assignment conversation runs on.
+ *
+ * @param unit  pointer to the unit: the header, then one whole frame
+ * @param len   number of bytes in unit
+ * @return      len when the unit was taken, 0 when none of it was (the caller
+ *              may retry the same unit)
+ */
+ssize_t klipper_host_input_unit(const uint8_t *unit, size_t len);
+
+/**
+ * Retrieve one complete mux unit, waiting for it to arrive.
+ *
+ * Only present when the library was built with CONFIG_HOST_FRAME_API *and*
+ * bridge mode (CONFIG_BRIDGE). Where klipper_host_output_frame() hands over a
+ * whole frame, this hands over a whole unit: the header naming the device the
+ * frame came from, plus that frame, so a host that speaks the mux never has to
+ * find the header's boundary itself.
+ *
+ * @param buf         output buffer to fill; must hold UNIT_MAX (the header plus
+ *                    the largest frame), otherwise nothing is returned
+ * @param buf_size    size of buffer
+ * @param timeout_ms  how long to wait for a unit; 0 returns immediately
+ * @return            unit bytes written to buf, 0 if no unit arrived in time
+ */
+size_t klipper_host_output_unit(uint8_t *buf, size_t buf_size,
+                                uint32_t timeout_ms);
+
+/**
  * Run the klipper main scheduling loop (blocking).
  * This function blocks until klipper_host_shutdown() is called.
  * Internal shutdowns (e.g. emergency_stop) keep the loop running

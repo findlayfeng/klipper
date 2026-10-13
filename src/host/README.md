@@ -26,6 +26,8 @@ Kconfig 中 `MACH_HOST` 已启用最小配置：只包含核心调度器、命�
 | `klipper_host_output(buf, size)` | 线程安全，读取 klipper 输出的帧数据（不等待） |
 | `klipper_host_output_wait(buf, size, ms)` | 同上，但在没有数据时最多等待 `ms` 毫秒；专用读取线程应当用它而不是轮询 |
 | `klipper_host_output_frame(buf, size, ms)` | 同上的等待语义，但**每次返回恰好一帧**（由帧自己的长度字节界定）；需要 `CONFIG_HOST_FRAME_API=y` 才编进库 |
+| `klipper_host_input_unit(unit, len)` | 一次交**一整单元**（2 字节复用头 + 帧）。需要 `CONFIG_HOST_FRAME_API=y` **且**开启桥模式（`CONFIG_BRIDGE`）；**半个单元被拒**（返回 0），因为 mux 靠头的两字节边界切单元 |
+| `klipper_host_output_unit(buf, size, ms)` | 同上的等待语义，但**每次返回恰好一整单元**（头 + 帧，头里就是来源设备）；同样需要帧接口开关 + 桥模式 |
 | `klipper_host_run()` | 阻塞运行 klipper 主循环（在独立线程中调用） |
 | `klipper_host_step()` | 非阻塞单步执行（用于集成外部事件循环） |
 | `klipper_host_shutdown()` | 线程安全，请求关闭，使 run() 返回 |
@@ -57,6 +59,19 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 两种模式都不丢消息，取舍只在"谁来负责找帧边界"：库里找（省掉调用方的重组逻辑，代价是缓冲区至少 `MESSAGE_MAX` 字节）还是调用方找。
 
 `make frames` 是这一开关的自检（见 `example/frames.c`，需要先用 `CONFIG_HOST_FRAME_API=y` 构建库）。
+
+### 帧接口与单元接口
+
+两个开关共用：
+
+- **帧接口（`CONFIG_HOST_FRAME_API`）**：`klipper_host_output_frame()`，按帧的长度字节取整帧。
+- **单元接口（`CONFIG_HOST_FRAME_API` **且** `CONFIG_BRIDGE`）**：`klipper_host_input_unit()` /
+  `klipper_host_output_unit()`，一次交/收**一整单元**（2 字节复用头 + 帧）。头在单元里，所以
+  主机不必自己找边界、也不必另外传 id。只有桥会向上游发单元，所以没有桥就不编这两个符号。
+
+**字节流永远是必实现的部分**：`klipper_host_input()` / `klipper_host_output_wait()` 始终存在，
+**分配/扫描**那段对话（KXID、admin 信道）就走它。两套 API 是同一对缓冲区的两种视图，
+调用方选定一种就一直用它。
 
 ### 桥模式（`CONFIG_HOST_BRIDGE_SERIAL`）
 
