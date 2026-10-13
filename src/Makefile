@@ -1,6 +1,9 @@
 # Main code build rules
 
 src-y += sched.c command.c basecmd.c debugcmds.c
+
+# Serial mux: the unit format a shared byte stream carries (MUX_SERIAL).
+src-$(CONFIG_MUX_SERIAL) += mux.c
 src-$(CONFIG_HAVE_GPIO) += initial_pins.c gpiocmds.c stepper.c endstop.c \
     trsync.c
 src-$(CONFIG_WANT_ADC) += adccmds.c
