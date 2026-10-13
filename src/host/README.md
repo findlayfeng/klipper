@@ -113,16 +113,32 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
   `command_find_and_dispatch` 处理），**否则 = 原始帧**（旧线上格式照旧）。已采纳 id 后，
   自己发出的帧会带上应答头（`mux_out_header`），所以字节流与 unit 接口看到的是同一串单元。
 - **桥半已实现**（公共 `src/bridge.c`/`bridge.h`，`CONFIG_BRIDGE`）：
-  - **端口表**：`bridge_add_port(ops, single_device)` 登记端口，host 侧把已打开的 tty 登记为
-    **单设备**下游端口（`src/host/bridge.c`），读写整单元、按需 flush。
+  - **端口表**：`bridge_add_port(ops)` 登记端口，host 侧把已打开的 tty 登记为下游端口，
+    读写整单元、按需 flush。**「单设备」是运行期 flags 而非编译期参数**（M1-P2 退役
+    `single_device` 形参）：默认 `flags=0` = legacy（剥头/加头，与旧行为等价），主机用
+    `SET_PORT_NODEID` 覆盖；`MUX_PORT_UNITS`（`0x01`）置位 = 该口设备说单元，收发整单元原样转发。
   - **两张路由表**：`uuid → 端口`（从下游上来的 `NEED_NODEID` 答里按帧长字节定位读 uuid，
     记住它从哪个端口来）与 `id → 端口`（上游 `SET_KLIPPER_NODEID(uuid,id)` 转发下去后记录；
     该 uuid 未知时先向下游补发一枚 `QUERY_UNASSIGNED` 探一次，带界）。一个端口可挂多个 id。
   - **admin 扇出**：上游的 `0x3f0` 单元（含 2 字节头）**原样**转给所有下游端口；
     下游的 `0x3f1` 答**逐条原样**转回上游——**不合并、不去重**（去重是主机的事），
     每个单元原子写出、不与其它端口交错。
-  - **数据单元**按 `id → 端口` 转发；目标端口是**单设备**路径时**剥掉 2 字节头**再发原始帧，
-    从单设备端口收到的**原始帧**按该端口的 id **加上应答方向（+1）的头**转回上游。
+  - **数据单元**按 `id → 端口` 转发；目标端口是 **legacy 口**时**剥掉 2 字节头**再发原始帧，
+    从 legacy 端口收到的**原始帧**按该端口的 id **加上应答方向（+1）的头**转回上游；
+    **说单元（UNITS）的口**两个方向都整单元原样转发。
+  - **端口级命令族（M1-P2）**：admin 信道新增三条面向桥自己的命令，全部**无回执、不下发**
+    （桥的 admin 处理函数以「是否消费」返回值短路本机设备半，`0x00`/`0x01` 的扇出与本机处理
+    逐位不变）：`SET_PORT_NODEID [0x03][index][id][flags]` 建 `id → 端口` 表并记该口 flags
+    （幂等，非法 index/id 静默丢弃）；`RESET_DEVICE [0x02][index]` 只转发到该口（UNITS 口带头、
+    legacy 口剥头——legacy 设备拒 seq `0x20` 属预期，无 admin 的 legacy 口只能走下一条），
+    无桥的板由设备半自己执行（`CONFIG_HAVE_BOOTLOADER_REQUEST` 守卫，index 字节忽略）；
+    `RESET_PORT [0x04][index]` 经 `bridge_port_ops.reset` 钩子（NULL=不支持）做线级复位——
+    host 侧实现为 DTR|RTS 断言 250 ms 后由 `bridge_poll` 的 poll 状态机恢复（不阻塞任务循环；
+    pty 等无 modem 线的 fd 返回 -1 静默）。
+  - **identify 字典端口表**（仅桥构建出现）：`BRIDGE_PORT_COUNT`、`BRIDGE_PORT<n>_NAME`
+    （host 串口为 `"uart0"`）、`BRIDGE_PORT<n>_TYPE`（`"uart"`）、`BRIDGE_PORT<n>_PATH`
+    （`CONFIG_HOST_BRIDGE_SERIAL_PATH` 的值）——`SET_PORT_NODEID` 里的 `index` 即表下标；
+    表随 arch 编译期声明，多端口/其他 arch 后端出现时按 `BRIDGE_PORT<n>_*` 同形状扩展。
   - 设备半的**重新确认握手**是**按 id 寻址**的（`KXID` 空体伪帧，头部是 `arb(id)`），设备在
     `arb(id)` 上认出它并回 `assignment_reply`——命令走 admin id，握手走 id，两者别混。
 - **host 侧读端口的时机**：`bridge_poll()` 插在任务循环的睡眠处（`src/host/timer.c` 的
