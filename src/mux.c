@@ -421,8 +421,23 @@ mux_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
         mux_admin_unit(frame, frame_len);
         return MUX_UNIT_CONSUMED;
     }
-    if (mux_assigned && arb == mux_arb_id(mux_assigned))
+    if (mux_assigned && arb == mux_arb_id(mux_assigned)) {
+        // Addressed to us. The re-confirmation handshake arrives this way - it
+        // is the `KXID` pseudo-frame with nothing after the marker, sent to the
+        // id the assignment named - and it is answered with the same frame on
+        // our reply id. Commands travel on the admin id instead (that is where
+        // a device with no id is listening), so a marked frame carrying one is
+        // left to the parser, which rejects the marker's sequence byte anyway.
+        struct mux_kxid kxid;
+        if (mux_parse_kxid(frame, frame_len, &kxid) && !kxid.args_len) {
+            uint8_t out[MUX_HEADER_BYTES + MESSAGE_MAX];
+            uint_fast8_t n = mux_assignment_reply(out, sizeof(out), mux_assigned);
+            if (n)
+                mux_send(out, n);
+            return MUX_UNIT_CONSUMED;
+        }
         return MUX_UNIT_OURS;
+    }
     // Anything else addresses a device this one is not. A bridge routes those to
     // its other ports (and a single-device port gets its header stripped);
     // without one there is nobody to hand the frame to, so it is dropped.
