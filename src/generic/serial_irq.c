@@ -170,10 +170,10 @@ void
 console_sendf(const struct command_encoder *ce, va_list args)
 {
 #if CONFIG_MUX_SERIAL
-    // In mux mode our own frames go out as units, the reply header naming us the
-    // way the incoming unit named us. mux_out_header writes nothing while this
-    // device has no node id, which keeps the old wire format: bare frames, the
-    // kind a path with one device on it carries.
+    // In mux mode our own frames go out as units, the reply header naming
+    // us the way the incoming unit named us. mux_out_header writes nothing
+    // while this device has no node id, which keeps the old wire format:
+    // bare frames, the kind a path with one device on it carries.
     uint8_t header[MUX_HEADER_BYTES];
     uint_fast8_t offset = mux_out_header(header);
 #else

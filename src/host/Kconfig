@@ -90,7 +90,7 @@ config HOST_AR_LIBRARY
     help
         Build the firmware as a static archive (.a) that can be
         linked into other applications.
-        
+
         If disabled, builds a shared library (.so) instead.
 
 config SERIAL

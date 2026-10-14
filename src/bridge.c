@@ -49,9 +49,9 @@
 #include "command.h" // MESSAGE_MIN, MESSAGE_MAX
 #include "mux.h" // the mux unit format
 
-// Downstream ports are the UART objects the host creates at configuration time
-// (uart.c hands each one here); the table is a small fixed array because nothing
-// adds and removes ports at run time.
+// Downstream ports are the UART objects the host creates at configuration
+// time (uart.c hands each one here); the table is a small fixed array
+// because nothing adds and removes ports at run time.
 #define BRIDGE_MAX_PORTS 4
 // One uuid per device that has answered a scan; a handful is plenty.
 #define BRIDGE_UUID_SLOTS 16
