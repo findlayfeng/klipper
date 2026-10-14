@@ -70,10 +70,22 @@ config SERIAL_BAUD
 # carries the stream: MUX_SERIAL today, MUX_CAN to follow.
 #
 # MUX and MUX_SERIAL are capabilities, not per-arch selections: whoever has the
-# wiring selects them, and an arch without the wiring simply leaves them off. A
-# micro-controller arch can select MUX_SERIAL only once its serial task is wired
-# to the mux half (generic/serial_irq.c calling mux_input/mux_send) - the host
-# library does that wiring itself, an MCU arch does not yet.
+# wiring selects them, and an arch without the wiring simply leaves them off.
+# The wiring lives with whoever carries the byte stream, so MUX_SERIAL is
+# offered wherever that carrier is: the host library's console task
+# (src/host/console.c, which HOST_MUX_SERIAL selects) and the generic serial
+# console every CONFIG_SERIAL arch shares (src/generic/serial_irq.c, calling
+# mux_input/mux_send). That is the `depends on SERIAL` below - a transport whose
+# console has no such wiring (linux, ar100, pru have none of their own) has no
+# SERIAL to depend on and cannot select it, so the choice never becomes a link
+# error.
+#
+# It is off by default, on purpose. On a micro-controller it changes the
+# console's wire format from bare frames to units, and units are not what the
+# upstream klippy host speaks, so a board that turns it on is a board whose host
+# has been told to expect the mux - a deliberate choice, never a default. The
+# host library is the other side of that call: it is a library and the host
+# decides, so HOST_MUX_SERIAL (src/host/Kconfig) turns it on there.
 #
 # BRIDGE is the router on top of it: it owns several ports - its own klipper
 # instance is one of them - and forwards each addressed unit to the port that
@@ -91,8 +103,19 @@ config SERIAL_BAUD
 config MUX
     bool
 config MUX_SERIAL
-    bool
+    bool "Serial mux: address this console in a shared byte stream"
+    depends on SERIAL
     select MUX
+    help
+        Make this build's console byte stream speak the serial mux: answer a
+        scan with this device's identity, adopt the node id it is handed, head
+        its own frames with the reply header, and shut down on an id collision
+        (src/mux.c). A build that speaks the mux is also a bridge (BRIDGE's
+        `default y if` below).
+
+        Off by default. With it the console's wire format is units, not the
+        bare frames the upstream klippy host speaks, so only a host that
+        expects the mux should ever be pointed at this board.
 config BRIDGE
     bool
     select MUX
