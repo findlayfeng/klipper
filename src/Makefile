@@ -6,6 +6,9 @@ src-y += sched.c command.c basecmd.c debugcmds.c
 src-$(CONFIG_MUX_SERIAL) += mux.c
 # Bridge: the router between the console's ports (BRIDGE).
 src-$(CONFIG_BRIDGE) += bridge.c
+# UART objects: the byte streams a host creates at configuration time and hands
+# to the bridge as ports (UART, the arch's backend is SERIAL_UART).
+src-$(CONFIG_UART) += uart.c
 src-$(CONFIG_HAVE_GPIO) += initial_pins.c gpiocmds.c stepper.c endstop.c \
     trsync.c
 src-$(CONFIG_WANT_ADC) += adccmds.c
