@@ -84,7 +84,7 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 | `MUX` | `src/Kconfig`（公共；无 prompt） | **设备半**：能被寻址、应答扫描/admin、采纳 nodeid、碰撞规则（逐字对照 CAN 的 `can_id_conflict`） | — |
 | `MUX_SERIAL` | `src/Kconfig`（公共；无 prompt） | 设备半跑在串口/字节流上 | — |
 | `BRIDGE` | `src/Kconfig`（公共；无 prompt） | **桥半**：端口表 + 路由 + 扇出（`select MUX`） | — |
-| `MUX_SERIAL` | `src/Kconfig`（公共，**有 prompt**） | 该控制台说单元（can等承载另行 select）；MCU 侧已接线，**不默认开** | `n` |
+| `MUX_SERIAL` | `src/Kconfig`（公共，**有 prompt**） | 该控制台说单元（can 等承载另行 select）；MCU 侧已接线，**不默认开**；`depends on HAVE_CHIPID || MACH_HOST`（无芯片 id 身份来源的架构不能选） | `n` |
 | `UART` / `SERIAL_UART` | `src/Kconfig`（公共） | 配置期 UART 对象（`config_uart`）与「本架构的 UART 可交给桥当端口」 | — |
 | `BRIDGE` | `src/Kconfig`（公共） | 路由体；**资源够就默认具备**：`default y if MUX_SERIAL` | — |
 | `HOST_BRIDGE_SERIAL` | `src/host/Kconfig` | host 上的可见开关，选上 MUX_SERIAL/BRIDGE/UART | `n` |
