@@ -49,6 +49,14 @@ serial_get_tx_byte(uint8_t *pdata)
 static void
 console_pop_input(uint_fast8_t len)
 {
+    // A caller can ask to drop more than the buffer holds:
+    // command_find_block's error path, finding no SYNC left to resynchronise
+    // on, reports the whole block it was handed (command.c). Clamp to what has
+    // actually arrived, or `rpos - len` below wraps around and the memmove runs
+    // off the end of the buffer.
+    uint_fast8_t buffered = readb(&receive_pos);
+    if (len > buffered)
+        len = buffered;
     uint_fast8_t copied = 0;
     for (;;) {
         uint_fast8_t rpos = readb(&receive_pos);
@@ -87,19 +95,24 @@ console_task(void)
     // here: its leading bytes are not a frame.
     //
     // The receive interrupt appends at receive_pos, so it must not run while
-    // mux_input rewrites the buffer; the position is read inside that section
-    // too, or bytes appended in between would be stranded past the count taken
-    // back out. The section is one memmove over at most RX_BUFFER_SIZE bytes -
-    // the same one console_pop_input holds - and mux_input writes only below
-    // the position the interrupt appends at. Should it shut down (an id
-    // collision), the shutdown's own longjmp leaves the interrupts disabled,
-    // which is what run_shutdown() expects.
+    // mux_input rewrites the buffer; the position is read, and set back to the
+    // mux's count, inside that section. The section is one memmove over at most
+    // RX_BUFFER_SIZE bytes - the same one console_pop_input holds - and
+    // mux_input writes only below the position the interrupt appends at. Should
+    // it shut down (an id collision), the shutdown's own longjmp leaves the
+    // interrupts disabled, which is what run_shutdown() expects.
+    //
+    // The parser reads exactly the mux's count, never the position we started
+    // from: mux_input consumes the units it resolves (and the junk it drops)
+    // off the front, so that count is the length of what may be parsed. The
+    // buffer's position is set to the same count, keeping the two in step - the
+    // count equals the start position when no unit was resolved at all.
     irqstatus_t flag = irq_save();
     rpos = readb(&receive_pos);
     size_t count = rpos;
     int ready = mux_input(receive_buf, &count);
-    if (count != rpos)
-        receive_pos = count;
+    receive_pos = count;
+    rpos = count;
     irq_restore(flag);
     if (!ready)
         // Nothing the parser may read: the front is a handled unit (already

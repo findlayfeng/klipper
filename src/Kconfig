@@ -80,6 +80,15 @@ config SERIAL_BAUD
 # SERIAL to depend on and cannot select it, so the choice never becomes a link
 # error.
 #
+# The device also has to have an identity to answer a scan with, so MUX_SERIAL
+# asks for one as well (`depends on HAVE_CHIPID || MACH_HOST`). On a
+# micro-controller the arch's chipid.c derives it from the chip id (the same
+# HAVE_CHIPID the USB serial number uses); the host library takes it from its
+# caller (klipper_host_set_uuid), so MACH_HOST is the other way to have one. An
+# arch with neither - avr, hc32f460, simulator have no chipid.c - would answer
+# with an all-zero identity, which names nothing: the option is not offered
+# there rather than offered broken.
+#
 # It is off by default, on purpose. On a micro-controller it changes the
 # console's wire format from bare frames to units, and units are not what the
 # upstream klippy host speaks, so a board that turns it on is a board whose host
@@ -105,6 +114,7 @@ config MUX
 config MUX_SERIAL
     bool "Serial mux: address this console in a shared byte stream"
     depends on SERIAL
+    depends on HAVE_CHIPID || MACH_HOST
     select MUX
     help
         Make this build's console byte stream speak the serial mux: answer a
@@ -112,6 +122,11 @@ config MUX_SERIAL
         its own frames with the reply header, and shut down on an id collision
         (src/mux.c). A build that speaks the mux is also a bridge (BRIDGE's
         `default y if` below).
+
+        Needs an identity to answer with: a micro-controller derives it from
+        its chip id (the arch's chipid.c, HAVE_CHIPID), the host library takes
+        it from its caller (klipper_host_set_uuid). An arch whose identity
+        would always be zero is not offered this option.
 
         Off by default. With it the console's wire format is units, not the
         bare frames the upstream klippy host speaks, so only a host that
