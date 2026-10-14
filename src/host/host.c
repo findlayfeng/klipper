@@ -19,12 +19,12 @@
 #include <pthread.h> // pthread_t, pthread_self, pthread_kill
 #include <stdio.h> // fprintf
 #include <string.h> // memset, memcpy
-#include "autoconf.h" // CONFIG_MUX_SERIAL, CONFIG_BRIDGE_PORT_SERIAL
+#include "autoconf.h" // CONFIG_MUX_SERIAL
 #include "basecmd.h" // stats_update
 #include "board/irq.h" // irq_poll
 #include "board/misc.h" // timer_read_time
 #include "sched.h" // sched_main, sched_is_shutdown
-#include "internal.h" // klipper_console_unlock, bridge_setup
+#include "internal.h" // klipper_console_unlock
 #include "mux.h" // mux_set_uuid, mux_uuid
 #include "klipper_host.h"
 
@@ -89,12 +89,10 @@ klipper_host_init(void)
             uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5]);
 #endif
 
-    // Bridge mode: take the firmware's serial port now, so a port that cannot
-    // be opened fails the init instead of surfacing later as a dead bridge.
-#if CONFIG_BRIDGE_PORT_SERIAL
-    if (bridge_setup() < 0)
-        return -1;
-#endif
+    // Bridge mode takes its downstream ports from the host's configuration
+    // (config_uart / config_bridge_port, src/uart.c), so init opens nothing and
+    // nothing here can fail on a tty that is not there: a port that cannot be
+    // brought up fails the configuration instead.
     g_initialised = 1;
     return 0;
 }

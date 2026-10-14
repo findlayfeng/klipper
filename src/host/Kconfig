@@ -43,42 +43,46 @@ config HOST_MUX_SERIAL
     help
         Makes the library's console stream speak the serial mux: the firmware
         answers a scan with its identity, adopts the node id it is handed, and
-        gives its own frames the reply header. This is the device half alone -
-        the library is a board on a shared serial path, with no downstream port
-        and no routing.
+        gives its own frames the reply header.
+
+        A mux build is also a bridge build: the routing bridge comes with the
+        mux half (src/Kconfig's BRIDGE `default y if`), so this alone is a
+        bridge with no ports - its own klipper instance and nothing else.
+        HOST_BRIDGE_SERIAL adds the host library's byte-stream backend, so the
+        host can hand ports to that bridge at configuration time.
 
         On by itself for a host library used as one device on a shared stream;
-        HOST_BRIDGE_SERIAL is the superset (this plus the routing bridge and
-        its serial port) and the two may be enabled together.
-
-        Off by default: the library then speaks the plain, headerless wire
-        format.
+        off by default, the library speaks the plain, headerless wire format.
 
 config HOST_BRIDGE_SERIAL
-    bool "Bridge mode: add a serial port to the console"
+    bool "Bridge mode: let the host hand this library UART ports"
     default n
-    select BRIDGE
     select BRIDGE_PORT_SERIAL
     select MUX_SERIAL
     help
         Klipper has one console, and this library hands it to the caller
-        through klipper_host_input()/klipper_host_output(). With this, the
-        firmware also owns a serial port - another port on that console - and
-        opens it during klipper_host_init().
+        through klipper_host_input()/klipper_host_output(). With this, the arch
+        also has a byte stream a host can hand to the bridge as a downstream
+        port: a UART object the host creates with config_uart, carrying the tty
+        and the rate it names.
 
-        The bridge routes each addressed unit to the port that owns its id and
-        fans the admin broadcasts out; this library's own klipper instance is
-        one of the ports. Off by default: the library then talks only through
-        the klipper_host_*() API and opens no device.
+        Nothing is opened at init. The library comes up with no ports, and the
+        host names them while it configures: a tty that cannot be opened (or a
+        rate it cannot set) fails that configuration explicitly. Off by
+        default: the library then talks only through the klipper_host_*() API
+        and opens no device.
 
 config HOST_BRIDGE_SERIAL_PATH
-    string "Serial port the bridge opens"
+    string "Serial port the bridge's UART objects open"
     depends on HOST_BRIDGE_SERIAL
     default "/dev/ttyACM0"
     help
-        The tty opened at init. The host has no fixed list of ports to choose
-        from, so this is a path rather than a choice; /dev/ttyACM0 is the
-        conventional Linux default (klipper's example configs all name it).
+        The tty a UART object created with config_uart opens. The host has no
+        fixed list of ports to choose from, so this is a path rather than a
+        choice; /dev/ttyACM0 is the conventional Linux default (klipper's
+        example configs all name it). It is the deployment fact - which tty -
+        while the rate is the host's configuration; this backend serves one
+        stream, so a second UART object is refused.
 
 config HOST_AR_LIBRARY
     bool "Build as AR static library (.a)"

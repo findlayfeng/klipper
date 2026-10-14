@@ -48,9 +48,10 @@ struct bridge_port_ops {
 // raw frame is given the reply header of the port's id on the way up. What a
 // port's device actually speaks is the host's call, not a build time one: it
 // sets MUX_PORT_UNITS per port with the port-level SET_PORT_NODEID once it
-// knows what is behind the port. Returns a non-negative port index, or -1 when
-// there is no room.
-int bridge_add_port(const struct bridge_port_ops *ops);
+// knows what is behind the port. 'ctx' is the pointer the port's ops receive
+// (the object whose stream the port carries). Returns a non-negative port
+// index, or -1 when there is no room.
+int bridge_add_port(const struct bridge_port_ops *ops, void *ctx);
 
 // Feed bytes read from downstream port 'port' into the router. Whole units and
 // frames are forwarded upstream as they arrive; a partial one is buffered until

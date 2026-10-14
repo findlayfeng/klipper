@@ -69,26 +69,48 @@ config SERIAL_BAUD
 # (generic/canserial.c:can_id_conflict). Every firmware wants it, whatever
 # carries the stream: MUX_SERIAL today, MUX_CAN to follow.
 #
+# MUX and MUX_SERIAL are capabilities, not per-arch selections: whoever has the
+# wiring selects them, and an arch without the wiring simply leaves them off. A
+# micro-controller arch can select MUX_SERIAL only once its serial task is wired
+# to the mux half (generic/serial_irq.c calling mux_input/mux_send) - the host
+# library does that wiring itself, an MCU arch does not yet.
+#
 # BRIDGE is the router on top of it: it owns several ports - its own klipper
 # instance is one of them - and forwards each addressed unit to the port that
-# owns the id. Which ports it has is the arch's to say: BRIDGE_PORT_SERIAL
-# today, where the host names the tty with HOST_BRIDGE_SERIAL_PATH.
+# owns the id. A build that already has the mux half of a byte stream has what a
+# bridge needs, so BRIDGE comes with it (the same `default y if` shape CANBUS
+# uses below). MUX_SERIAL selects MUX, so the condition is `MUX && MUX_SERIAL`
+# written as the one term that implies the other - spelling both out makes
+# kconfig read `select MUX` and this default as a dependency loop. MUX_CAN does
+# not exist yet; it will count here too once it does.
+#
+# Which ports the bridge can be given is the arch's to say. BRIDGE_PORT_SERIAL
+# is that: this arch's UART objects (src/uart.c) can be handed to the bridge as
+# downstream ports; nothing opens a device on its own. The host names which
+# stream such an object carries, and at what rate, at configuration time.
 config MUX
     bool
 config MUX_SERIAL
     bool
+    select MUX
 config BRIDGE
     bool
     select MUX
+    default y if MUX_SERIAL
 config BRIDGE_PORT_SERIAL
     bool
-config BRIDGE_PORT_SERIAL_BAUD
-    depends on BRIDGE_PORT_SERIAL
-    int "Baud rate for the bridge serial port" if LOW_LEVEL_OPTIONS
-    default 250000
-    help
-        Specify the baud rate of the serial port a bridge opens. This should
-        be set to 250000. Read the FAQ before changing this value.
+
+# The byte-stream UART object layer (src/uart.c): an oid a host creates at
+# configuration time, the line rate it asked for, and the seam an arch fills.
+config UART
+    bool
+# A byte stream an arch can attach to a UART object: the host library's tty
+# backend (src/host/bridge.c) today. An arch selects this once it can hand a
+# UART object out as a bridge port.
+config SERIAL_UART
+    bool
+    select UART
+    default y if BRIDGE_PORT_SERIAL
 
 # Generic configuration options for USB
 config USBSERIAL

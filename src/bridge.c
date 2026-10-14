@@ -49,8 +49,9 @@
 #include "command.h" // MESSAGE_MIN, MESSAGE_MAX
 #include "mux.h" // the mux unit format
 
-// Downstream ports today are one (host/bridge.c); the table is a small fixed
-// array because nothing adds and removes ports at run time.
+// Downstream ports are the UART objects the host creates at configuration time
+// (uart.c hands each one here); the table is a small fixed array because nothing
+// adds and removes ports at run time.
 #define BRIDGE_MAX_PORTS 4
 // One uuid per device that has answered a scan; a handful is plenty.
 #define BRIDGE_UUID_SLOTS 16
@@ -379,13 +380,14 @@ bridge_port_scan(int index)
  ****************************************************************/
 
 int
-bridge_add_port(const struct bridge_port_ops *ops)
+bridge_add_port(const struct bridge_port_ops *ops, void *ctx)
 {
     int i;
     for (i = 0; i < BRIDGE_MAX_PORTS; i++) {
         if (bridge_ports[i].in_use)
             continue;
         bridge_ports[i].ops = *ops;
+        bridge_ports[i].ops.ctx = ctx;
         // No flags: the port starts legacy, and the host names what is behind
         // it with the port-level SET_PORT_NODEID.
         bridge_ports[i].flags = 0;

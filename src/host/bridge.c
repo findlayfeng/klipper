@@ -1,17 +1,24 @@
-// Bridge mode: the host's downstream serial port
+// Bridge mode: the host library's byte-stream UART backend
 //
 // Bridge mode gives the console more ports and relays between them. The router
 // is CONFIG_BRIDGE and the device half CONFIG_MUX, both transport-neutral (see
-// src/Kconfig); which ports a bridge owns is the arch's to say, and this file
-// is the host's serial port backend (CONFIG_BRIDGE_PORT_SERIAL): it opens the
-// tty during klipper_host_init() and puts it in the raw mode the protocol
-// needs.
+// src/Kconfig); this file is the arch backend that gives a bridge its streams on
+// the host library (CONFIG_BRIDGE_PORT_SERIAL): it opens the tty the host names
+// when the host creates a UART object (config_uart, src/uart.c), puts it in the
+// raw mode the protocol needs, registers it as a downstream port, and polls it
+// from the task loop's sleep (bridge_poll, called by irq_wait) so its bytes
+// reach the router next to the console's other work instead of blocking a
+// thread on it, the way src/linux/console.c polls its tty.
 //
-// Feeding the port into the console is bridge.c's job (the router): this file
-// opens the tty, registers it as a downstream port, and polls it from the task
-// loop's sleep (bridge_poll, called by irq_wait) so its bytes reach the router
-// next to the console's other work instead of blocking a thread on it, the way
-// src/linux/console.c polls its tty.
+// Nothing here runs at init: which port a bridge owns is a configuration fact,
+// so the stream is opened while the host is configuring, and a tty that cannot
+// be opened (or a rate it cannot set) fails that configuration explicitly
+// instead of leaving a bridge that comes up without its port.
+//
+// This backend serves one stream - the tty CONFIG_HOST_BRIDGE_SERIAL_PATH names
+// - so a second UART object on this build is refused rather than silently
+// sharing the fd. Which tty a port is on is a deployment fact, not a serial
+// parameter; the rate is the parameter, and it arrives with config_uart.
 //
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
 //
@@ -25,15 +32,20 @@
 #include <string.h> // strerror
 #include <sys/ioctl.h> // ioctl
 #include <unistd.h> // close
-#include "autoconf.h" // CONFIG_BRIDGE_PORT_SERIAL*, CONFIG_BRIDGE
+#include "autoconf.h" // CONFIG_BRIDGE, CONFIG_HOST_BRIDGE_SERIAL_PATH
 #include "bridge.h" // bridge_add_port, bridge_port_input
-#include "command.h" // MESSAGE_MAX, DECL_CONSTANT*
+#include "command.h" // MESSAGE_MAX
 #include "generic/misc.h" // timer_read_time, timer_is_before, timer_from_us
 #include "mux.h" // MUX_HEADER_BYTES
-#include "internal.h" // bridge_setup, bridge_poll
+#include "internal.h" // bridge_poll
+#include "uart.h" // uart_backend_*
 
-// The bridge's serial port, or -1 when it has not been opened.
+// The one stream this backend serves, or -1 before the host configures a UART
+// object. The port index is the one the router gave that object (assigned at
+// configuration time), so a byte read here is fed to bridge_port_input() under
+// the right port.
 static int bridge_fd = -1;
+static int bridge_port = -1;
 
 // Report 'errno' in a message written to stderr, naming the call that failed,
 // and answer -1 so callers can 'return bridge_errno("...")' directly.
@@ -83,13 +95,38 @@ set_raw_mode(int fd, unsigned int baud)
     return 0;
 }
 
+// Open the tty a UART object carries. Called from config_uart (src/uart.c) while
+// the host is configuring, so a tty that is not there fails the configuration
+// rather than the library coming up without its port.
+enum uart_open_result
+uart_backend_open(struct uart_s *u, uint32_t baud)
+{
+    (void)u;
+    if (bridge_fd >= 0)
+        return UART_OPEN_BUSY;
+
+    const char *path = CONFIG_HOST_BRIDGE_SERIAL_PATH;
+    int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        bridge_errno(path);
+        return UART_OPEN_NO_DEVICE;
+    }
+    if (set_raw_mode(fd, baud) < 0) {
+        close(fd);
+        return UART_OPEN_BAD_BAUD;
+    }
+    bridge_fd = fd;
+    fprintf(stderr, "bridge serial: %s open at %u baud (fd %d)\n", path,
+            (unsigned int)baud, fd);
+    return UART_OPEN_OK;
+}
+
 #if CONFIG_BRIDGE
 // The router's end of the port. bridge.c hands each unit over as one blob and
 // this holds it until the device can take it, so a unit is written whole and a
 // later one never cuts in front of it.
 static uint8_t bridge_tx[2 * (MUX_HEADER_BYTES + MESSAGE_MAX)];
 static size_t bridge_tx_len;
-static int bridge_port = -1;
 
 // Push as much of the queued output at the port as the (non-blocking) fd takes.
 static void
@@ -141,9 +178,9 @@ bridge_port_write(void *ctx, const uint8_t *data, size_t len)
 // protocol allows, and the reset layer (reset-only vs bootloader entry) is the
 // host's to choose later - this only pulses the line.
 //
-// The hook ignores ctx: this backend serves exactly one port and drives the
-// global bridge_fd. A second port in this backend would have to carry its own
-// fd, and this would have to become per-port state.
+// The hook ignores ctx: this backend serves exactly one stream and drives the
+// global bridge_fd. A backend with several streams would carry each one's fd in
+// its object and this would become per-port state.
 #define BRIDGE_RESET_HOLD_US 250000
 static int bridge_reset_active;           // a reset pulse is in flight
 static uint32_t bridge_reset_restore_at;  // when the lines come back
@@ -195,15 +232,23 @@ static const struct bridge_port_ops bridge_serial_ops = {
     .reset = bridge_port_reset,
 };
 
-// The port table this bridge reports in its identify dictionary: today the one
-// serial port above, named "uart0" - the oid the host config refers to the port
-// by. The name belongs to the firmware (the host must never guess it), and the
-// index its row carries (0 here) is what the port-level SET_PORT_NODEID travels
-// with, so this table is how the host learns it.
-DECL_CONSTANT("BRIDGE_PORT_COUNT", 1);
-DECL_CONSTANT_STR("BRIDGE_PORT0_NAME", "uart0");
-DECL_CONSTANT_STR("BRIDGE_PORT0_TYPE", "uart");
-DECL_CONSTANT_STR("BRIDGE_PORT0_PATH", CONFIG_HOST_BRIDGE_SERIAL_PATH);
+// The router's ops for a UART object: this backend serves one stream, so the
+// ops are the same for every object it can carry, and 'ctx' is unused.
+const struct bridge_port_ops *
+uart_backend_port_ops(struct uart_s *u)
+{
+    (void)u;
+    return &bridge_serial_ops;
+}
+
+// The router gave the object this port index; the poll below feeds the bytes it
+// reads under that port.
+void
+uart_backend_set_port(struct uart_s *u, int index)
+{
+    (void)u;
+    bridge_port = index;
+}
 
 // Read whatever the downstream device has sent and hand it to the router.
 //
@@ -232,35 +277,3 @@ bridge_poll(void)
     }
 }
 #endif // CONFIG_BRIDGE
-
-// Open the bridge's serial port. Called once from klipper_host_init(); returns
-// 0 when the port is ready, -1 when it cannot be brought up.
-//
-// A failure is not swallowed: bridge mode was asked for at build time, so a
-// library that comes up without its port would be lying about what it is.
-int
-bridge_setup(void)
-{
-    if (bridge_fd >= 0)
-        return 0;
-
-    const char *path = CONFIG_HOST_BRIDGE_SERIAL_PATH;
-    int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0)
-        return bridge_errno(path);
-    if (set_raw_mode(fd, CONFIG_BRIDGE_PORT_SERIAL_BAUD) < 0) {
-        close(fd);
-        return -1;
-    }
-    bridge_fd = fd;
-#if CONFIG_BRIDGE
-    // The bridge's first downstream port: this tty. It registers with no flags
-    // - a legacy port until the host says what is behind it, which it does with
-    // the port-level SET_PORT_NODEID once it knows (the table above is what
-    // tells it which index this port answers to).
-    bridge_port = bridge_add_port(&bridge_serial_ops);
-#endif
-    fprintf(stderr, "bridge serial: %s open at %u baud (fd %d)\n", path,
-            (unsigned int)CONFIG_BRIDGE_PORT_SERIAL_BAUD, fd);
-    return 0;
-}
