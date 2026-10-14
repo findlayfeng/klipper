@@ -140,6 +140,10 @@ bridge_port_write(void *ctx, const uint8_t *data, size_t len)
 // differently is a different backend; the hold is the bounded 250ms the
 // protocol allows, and the reset layer (reset-only vs bootloader entry) is the
 // host's to choose later - this only pulses the line.
+//
+// The hook ignores ctx: this backend serves exactly one port and drives the
+// global bridge_fd. A second port in this backend would have to carry its own
+// fd, and this would have to become per-port state.
 #define BRIDGE_RESET_HOLD_US 250000
 static int bridge_reset_active;           // a reset pulse is in flight
 static uint32_t bridge_reset_restore_at;  // when the lines come back
@@ -151,6 +155,11 @@ bridge_port_reset(void *ctx)
     (void)ctx;
     if (bridge_fd < 0)
         return -1;
+    // A pulse is already in flight: take the request as done rather than
+    // re-reading the asserted lines as "original state", which would restore
+    // the asserted level at the deadline and hold the device in reset forever.
+    if (bridge_reset_active)
+        return 0;
     int bits;
     if (ioctl(bridge_fd, TIOCMGET, &bits) < 0)
         return -1;               // no modem lines: a pty or similar
