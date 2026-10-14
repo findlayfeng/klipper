@@ -10,6 +10,10 @@
 #include "generic/usbstd.h" // usb_string_descriptor
 #include "internal.h" // EFC0
 #include "sched.h" // DECL_INIT
+#if CONFIG_MUX_SERIAL
+#include "generic/chipid_uuid.h" // chipid_uuid
+#include "mux.h" // mux_set_uuid, MUX_UUID_LEN
+#endif
 
 #define CHIP_UID_LEN 16
 
@@ -62,7 +66,8 @@ read_chip_id(uint32_t *id)
 void
 chipid_init(void)
 {
-    if (!CONFIG_USB_SERIAL_NUMBER_CHIPID && !CONFIG_CANBUS)
+    if (!CONFIG_USB_SERIAL_NUMBER_CHIPID && !CONFIG_CANBUS
+        && !CONFIG_MUX_SERIAL)
         return;
 
     uint32_t id[4];
@@ -75,5 +80,11 @@ chipid_init(void)
 
     if (CONFIG_CANBUS)
         canserial_set_uuid((void*)id, CHIP_UID_LEN);
+
+#if CONFIG_MUX_SERIAL
+    uint8_t uuid[MUX_UUID_LEN];
+    chipid_uuid(uuid, (void*)id, CHIP_UID_LEN);
+    mux_set_uuid(uuid);
+#endif
 }
 DECL_INIT(chipid_init);

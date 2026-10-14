@@ -38,6 +38,9 @@ canbus-src-y := generic/canserial.c ../lib/fast-hash/fasthash.c
 canbus-src-y += atsam/fdcan.c atsam/chipid.c
 src-$(CONFIG_USBCANBUS) += $(canbus-src-y) $(usb-src-y) generic/usb_canbus.c
 src-$(CONFIG_CANSERIAL) += $(canbus-src-y) generic/canbus.c
+# The mux identity is derived from the chip id (generic/chipid_uuid.h), the
+# same way the canbus uuid is.
+src-$(CONFIG_MUX_SERIAL) += atsam/chipid.c ../lib/fast-hash/fasthash.c
 src-$(CONFIG_MACH_SAM3X) += atsam/adc.c atsam/hard_pwm.c
 src-$(CONFIG_MACH_SAM4)  += atsam/hard_pwm.c
 src-$(CONFIG_MACH_SAM4S) += atsam/adc.c

@@ -9,6 +9,10 @@
 #include "generic/usbstd.h" // usb_string_descriptor
 #include "internal.h" // UID_BASE
 #include "sched.h" // DECL_INIT
+#if CONFIG_MUX_SERIAL
+#include "generic/chipid_uuid.h" // chipid_uuid
+#include "mux.h" // mux_set_uuid, MUX_UUID_LEN
+#endif
 
 #define CHIP_UID_LEN 12
 
@@ -31,5 +35,12 @@ chipid_init(void)
                         , (void*)UID_BASE);
     if (CONFIG_CANBUS)
         canserial_set_uuid((void*)UID_BASE, CHIP_UID_LEN);
+#if CONFIG_MUX_SERIAL
+    {
+        uint8_t uuid[MUX_UUID_LEN];
+        chipid_uuid(uuid, (void*)UID_BASE, CHIP_UID_LEN);
+        mux_set_uuid(uuid);
+    }
+#endif
 }
 DECL_INIT(chipid_init);

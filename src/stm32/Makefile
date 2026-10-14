@@ -87,6 +87,9 @@ canbus-src-$(CONFIG_HAVE_STM32_FDCANBUS) += stm32/fdcan.c
 src-$(CONFIG_CANSERIAL) += $(canbus-src-y) generic/canbus.c stm32/chipid.c
 src-$(CONFIG_USBCANBUS) += $(usb-src-y) $(canbus-src-y)
 src-$(CONFIG_USBCANBUS) += stm32/chipid.c generic/usb_canbus.c
+# The mux identity is derived from the chip id (generic/chipid_uuid.h), the
+# same way the canbus uuid is.
+src-$(CONFIG_MUX_SERIAL) += stm32/chipid.c ../lib/fast-hash/fasthash.c
 src-$(CONFIG_WANT_HARD_PWM) += stm32/hard_pwm.c
 src-$(CONFIG_HAVE_GPIO_SDIO) += stm32/sdio.c
 
