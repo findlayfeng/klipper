@@ -25,6 +25,13 @@
 extern "C" {
 #endif
 
+/// How many bridge ports a host may name a tty for (klipper_host_port).
+///
+/// A UART object's slot is the port's index on the bridge, and the bridge holds
+/// at most BRIDGE_MAX_PORTS ports (src/bridge.c), so no port can sit outside
+/// this range.
+#define KLIPPER_HOST_PORT_SLOTS 4
+
 /**
  * Initialize the klipper host library.
  * Must be called before any other klipper_host_* functions.
@@ -47,6 +54,29 @@ int klipper_host_init(void);
  * @return      0 on success, -1 when klipper_host_init() has already run
  */
 int klipper_host_set_uuid(const uint8_t uuid[6]);
+
+/**
+ * Name the tty the bridge port `slot` opens.
+ *
+ * A bridge opens no stream of its own: the host creates each port while it
+ * configures the device and names the tty behind it here, so which tty a port
+ * is on is the host's to say rather than a fact of the build. The path is
+ * fixed once the device is up - the port opens when the host's `config_uart`
+ * arrives - so it has to be set before klipper_host_init(), exactly as the
+ * identity is, and a late call is reported rather than half-applied. The string
+ * is copied, so the caller may free it.
+ *
+ * A slot the host never names falls back to the path this build was configured
+ * with (CONFIG_HOST_BRIDGE_SERIAL_PATH), so a host that says nothing keeps the
+ * behaviour of a plain bridge build.
+ *
+ * @param slot  0..KLIPPER_HOST_PORT_SLOTS-1: the port's index on the bridge,
+ *              the same number the UART object is created with
+ * @param path  the tty, NUL-terminated
+ * @return      0 on success, -1 when klipper_host_init() has already run, when
+ *              slot is out of range, or when path does not fit
+ */
+int klipper_host_port(int slot, const char *path);
 
 /**
  * Feed input data into the klipper console.

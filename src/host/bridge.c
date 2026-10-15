@@ -3,22 +3,28 @@
 // Bridge mode gives the console more ports and relays between them. The router
 // is CONFIG_BRIDGE and the device half CONFIG_MUX, both transport-neutral (see
 // src/Kconfig); this file is the arch backend that gives a bridge its streams on
-// the host library (CONFIG_BRIDGE_PORT_SERIAL): it opens the tty the host names
-// when the host creates a UART object (config_uart, src/uart.c), puts it in the
-// raw mode the protocol needs, registers it as a downstream port, and polls it
-// from the task loop's sleep (bridge_poll, called by irq_wait) so its bytes
-// reach the router next to the console's other work instead of blocking a
-// thread on it, the way src/linux/console.c polls its tty.
+// the host library (CONFIG_BRIDGE_PORT_SERIAL): it opens the tty the host named
+// for that port when the host creates a UART object (config_uart, src/uart.c),
+// puts it in the raw mode the protocol needs, registers it as a downstream
+// port, and polls it from the task loop's sleep (bridge_poll, called by
+// irq_wait) so its bytes reach the router next to the console's other work
+// instead of blocking a thread on it, the way src/linux/console.c polls its
+// tty.
 //
 // Nothing here runs at init: which port a bridge owns is a configuration fact,
 // so the stream is opened while the host is configuring, and a tty that cannot
 // be opened (or a rate it cannot set) fails that configuration explicitly
 // instead of leaving a bridge that comes up without its port.
 //
-// This backend serves one stream - the tty CONFIG_HOST_BRIDGE_SERIAL_PATH names
-// - so a second UART object on this build is refused rather than silently
-// sharing the fd. Which tty a port is on is a deployment fact, not a serial
-// parameter; the rate is the parameter, and it arrives with config_uart.
+// Which tty a port is on is the host's to say at run time: it names one per port
+// with klipper_host_port() before klipper comes up (host.c), and the UART object
+// carries the port's slot, so the stream opened here is the one that port was
+// named. A slot the host never named falls back to CONFIG_HOST_BRIDGE_SERIAL_PATH,
+// the path a plain bridge build opens.
+//
+// This backend still serves one stream - a second UART object on this build is
+// refused rather than silently sharing the fd. Which tty a port is on is not a
+// serial parameter; the rate is the parameter, and it arrives with config_uart.
 //
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
 //
@@ -95,17 +101,23 @@ set_raw_mode(int fd, unsigned int baud)
     return 0;
 }
 
-// Open the tty a UART object carries. Called from config_uart (src/uart.c) while
-// the host is configuring, so a tty that is not there fails the configuration
-// rather than the library coming up without its port.
+// Open the tty the UART object's port is on. Called from config_uart (src/uart.c)
+// while the host is configuring, so a tty that is not there fails the
+// configuration rather than the library coming up without its port.
+//
+// 'slot' is the port's index on the bridge, which is the number the host named
+// its tty with (klipper_host_port, host.c); a slot it never named opens the path
+// this build was configured with.
 enum uart_open_result
-uart_backend_open(struct uart_s *u, uint32_t baud)
+uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
 {
     (void)u;
     if (bridge_fd >= 0)
         return UART_OPEN_BUSY;
 
-    const char *path = CONFIG_HOST_BRIDGE_SERIAL_PATH;
+    const char *path = klipper_host_port_path(slot);
+    if (!path)
+        path = CONFIG_HOST_BRIDGE_SERIAL_PATH;
     int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         bridge_errno(path);

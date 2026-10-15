@@ -35,6 +35,14 @@ static volatile int g_klipper_thread_active;
 static jmp_buf g_main_jmp;
 static int g_initialised;
 
+// The tty the host named for each bridge port, one slot per port index, before
+// klipper came up (klipper_host_port). A bit in g_port_named says whether its
+// slot was named at all; an unnamed one falls back to the build's own path
+// (CONFIG_HOST_BRIDGE_SERIAL_PATH, read by src/host/bridge.c).
+#define HOST_PORT_PATH_MAX 256
+static char g_port_paths[KLIPPER_HOST_PORT_SLOTS][HOST_PORT_PATH_MAX];
+static unsigned int g_port_named;
+
 
 
 // SIGUSR1 handler - longjmp out of sched_main() on external shutdown
@@ -63,6 +71,36 @@ klipper_host_set_uuid(const uint8_t uuid[6])
     (void)uuid;
 #endif
     return 0;
+}
+
+// Name the tty the bridge port 'slot' opens. Has to happen before
+// klipper_host_init(): the port opens when the host's config_uart arrives, and
+// the stream it gets is fixed once the device is up, so a late call is reported
+// rather than half-applied. The path is copied here - the caller keeps no
+// lifetime it would have to honour.
+int
+klipper_host_port(int slot, const char *path)
+{
+    if (g_initialised)
+        return -1;
+    if (slot < 0 || slot >= KLIPPER_HOST_PORT_SLOTS || !path)
+        return -1;
+    int len = snprintf(g_port_paths[slot], sizeof(g_port_paths[slot]), "%s",
+                       path);
+    if (len < 0 || (size_t)len >= sizeof(g_port_paths[slot]))
+        return -1;
+    g_port_named |= 1u << slot;
+    return 0;
+}
+
+// The tty the host named for 'slot', or NULL when it named none.
+const char *
+klipper_host_port_path(int slot)
+{
+    if (slot < 0 || slot >= KLIPPER_HOST_PORT_SLOTS
+        || !(g_port_named & (1u << slot)))
+        return NULL;
+    return g_port_paths[slot];
 }
 
 // Initialize the host library

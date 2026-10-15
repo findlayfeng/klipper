@@ -7,6 +7,11 @@
 #define __HOST_INTERNAL_H
 // Internal definitions shared between klipper host library modules.
 
+// host.c - the tty the host named for bridge port 'slot' with
+// klipper_host_port(), or NULL when it named none - the port then falls back to
+// the build's own path. Used by bridge.c when a UART object opens.
+const char *klipper_host_port_path(int slot);
+
 // console.c - unlock console mutexes (used after longjmp unwinding)
 void klipper_console_unlock(void);
 

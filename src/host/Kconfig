@@ -73,16 +73,18 @@ config HOST_BRIDGE_SERIAL
         and opens no device.
 
 config HOST_BRIDGE_SERIAL_PATH
-    string "Serial port the bridge's UART objects open"
+    string "Serial port the bridge's UART objects open by default"
     depends on HOST_BRIDGE_SERIAL
     default "/dev/ttyACM0"
     help
-        The tty a UART object created with config_uart opens. The host has no
-        fixed list of ports to choose from, so this is a path rather than a
-        choice; /dev/ttyACM0 is the conventional Linux default (klipper's
-        example configs all name it). It is the deployment fact - which tty -
-        while the rate is the host's configuration; this backend serves one
-        stream, so a second UART object is refused.
+        The tty a UART object created with config_uart opens when the host
+        named none for that port. The host is what says which tty each port is
+        on, at run time and per port (klipper_host_port, before the device
+        comes up), so this is only the fallback a host that stays silent gets -
+        and the path a bridge build opens with no host configuration at all.
+        /dev/ttyACM0 is the conventional Linux default (klipper's example
+        configs all name it). This backend serves one stream, so a second UART
+        object is refused.
 
 config HOST_AR_LIBRARY
     bool "Build as AR static library (.a)"

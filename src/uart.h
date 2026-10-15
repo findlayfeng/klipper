@@ -7,15 +7,17 @@
 // configuration time with config_uart, and the line rate it asked for.
 //
 // The object is the transport-neutral half - the oid, the rate, and the seam
-// below. Which byte stream a build can offer is the arch's (CONFIG_SERIAL_UART):
-// the host library's backend is src/host/bridge.c, which opens the tty
-// CONFIG_HOST_BRIDGE_SERIAL_PATH names and polls it from the task loop; a
-// micro-controller arch would wire its serial task here instead.
+// below. Which byte stream a build can offer is the arch's
+// (CONFIG_SERIAL_UART): the host library's backend is src/host/bridge.c, which
+// opens the tty the host named for that slot (klipper_host_port,
+// src/host/host.c) - or CONFIG_HOST_BRIDGE_SERIAL_PATH when it named none - and
+// polls it from the task loop; a micro-controller arch would wire its serial
+// task here instead.
 //
-// The rate is a configuration fact, not a build-time one: config_uart carries
-// it, so a rate the build cannot offer, a stream it cannot open, or a second
-// object it cannot serve is reported while the host is configuring - not left
-// behind as a dead port later.
+// The rate and the port's tty are configuration facts, not build-time ones:
+// config_uart carries the rate and the port slot, so a rate the build cannot
+// offer, a stream it cannot open, or a second object it cannot serve is reported
+// while the host is configuring - not left behind as a dead port later.
 
 struct uart_s;
 
@@ -27,10 +29,12 @@ enum uart_open_result {
     UART_OPEN_BUSY,        // this arch's byte stream already carries a UART
 };
 
-// Open the byte stream behind 'u' at 'baud'. Called once per object, when the
-// host configures it. The result names why a failure failed; the caller reports
-// it (shutdown()) with a message of its own.
-enum uart_open_result uart_backend_open(struct uart_s *u, uint32_t baud);
+// Open the byte stream behind 'u' at 'baud' on bridge port 'slot' - the slot the
+// object was created with, whose tty the host named before the device came up
+// (klipper_host_port). Called once per object, when the host configures it. The
+// result names why a failure failed; the caller reports it (shutdown()) with a
+// message of its own.
+enum uart_open_result uart_backend_open(struct uart_s *u, uint32_t baud, int slot);
 
 #if CONFIG_BRIDGE
 // The router's ops for 'u' as a downstream port: write() queues a whole blob on

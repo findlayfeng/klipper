@@ -2,11 +2,12 @@
 //
 // Bridge mode gives the console more ports than the one it comes up with, and
 // which stream each of those ports carries is a configuration fact, not a build
-// one: the host creates a UART object with config_uart (an oid it allocates and
-// the line rate it wants), and then hands it to the bridge as a downstream port
-// with config_bridge_port. So a bridge build opens no device on its own - a
-// stream it cannot bring up, or a rate it cannot set, is reported while the host
-// is still configuring, instead of surfacing later as a port that never speaks.
+// one: the host creates a UART object with config_uart (an oid it allocates, the
+// line rate it wants, and the port slot whose tty it named with
+// klipper_host_port), and then hands it to the bridge as a downstream port with
+// config_bridge_port. So a bridge build opens no device on its own - a stream it
+// cannot bring up, or a rate it cannot set, is reported while the host is still
+// configuring, instead of surfacing later as a port that never speaks.
 //
 // The object itself is the transport-neutral half (uart.h): the oid, the rate,
 // and the seam the arch fills (CONFIG_SERIAL_UART). Everything arch-shaped -
@@ -31,20 +32,26 @@ struct uart_s {
     void *ctx;
 };
 
-// Create a UART object at the rate the host asks for. A duplicate oid is
-// refused by oid_alloc; everything else that can go wrong is opening the
-// stream, and each outcome gets its own message so the host learns why.
+// Create a UART object at the rate the host asks for, on the bridge port ("path"
+// on the wire) the object belongs to. A duplicate oid is refused by oid_alloc;
+// everything else that can go wrong is opening the stream, and each outcome gets
+// its own message so the host learns why.
+//
+// The slot is the port's index on the bridge, the same number the host named the
+// port's tty with before the device came up (klipper_host_port), so the backend
+// opens exactly the stream that port was given.
 void
 command_config_uart(uint32_t *args)
 {
     uint8_t oid = args[0];
     uint32_t baud = args[1];
+    int slot = args[2];
     struct uart_s *u = oid_alloc(oid, command_config_uart, sizeof(*u));
     u->baud = baud;
     u->ctx = NULL;
     if (!baud)
         shutdown("config_uart: baud must be nonzero");
-    switch (uart_backend_open(u, baud)) {
+    switch (uart_backend_open(u, baud, slot)) {
     case UART_OPEN_OK:
         break;
     case UART_OPEN_BAD_BAUD:
@@ -56,7 +63,7 @@ command_config_uart(uint32_t *args)
         shutdown("config_uart: the UART device could not be opened");
     }
 }
-DECL_COMMAND(command_config_uart, "config_uart oid=%c baud=%u");
+DECL_COMMAND(command_config_uart, "config_uart oid=%c baud=%u path=%c");
 
 #if CONFIG_BRIDGE
 // A bridge port object: the oid the host names the port by, and the UART object
