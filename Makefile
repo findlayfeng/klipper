@@ -58,6 +58,13 @@ endif
 include src/Makefile
 -include src/$(patsubst "%",%,$(CONFIG_BOARD_DIRECTORY))/Makefile
 
+# One object per source file, even when more than one carrier brings it in: an
+# arch's chipid.c is listed under USB serial, CAN serial and the serial mux, and
+# those symbols now overlap (MUX_SERIAL on a USB CDC console is a real build).
+# Without this the file is linked twice (multiple definitions) and, worse, its
+# commands are counted twice in compile_time_request.
+src-y := $(sort $(src-y))
+
 ################ Main build rules
 
 $(OUT)%.o: %.c $(OUT)autoconf.h

@@ -82,9 +82,9 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 | 选项 | 位置 | 含义 | 默认 |
 |------|------|------|------|
 | `MUX` | `src/Kconfig`（公共；无 prompt） | **设备半**：能被寻址、应答扫描/admin、采纳 nodeid、碰撞规则（逐字对照 CAN 的 `can_id_conflict`） | — |
-| `MUX_SERIAL` | `src/Kconfig`（公共；无 prompt） | 设备半跑在串口/字节流上 | — |
+| `MUX_SERIAL` | `src/Kconfig`（**能力**，无 prompt；由下面同一名字的选项 select） | 设备半跑在串口/字节流上 | — |
 | `BRIDGE` | `src/Kconfig`（公共；无 prompt） | **桥半**：端口表 + 路由 + 扇出（`select MUX`） | — |
-| `MUX_SERIAL` | `src/Kconfig`（公共，**有 prompt**） | 该控制台说单元（can 等承载另行 select）；MCU 侧已接线，**不默认开**；`depends on HAVE_CHIPID || MACH_HOST || MACH_LINUX`（linux 没有芯片 id，身份由运行期 `-U <12 hex>` 给，见下一节） | `n` |
+| `MUX_SERIAL` | `src/Kconfig`（**选项**，有 prompt） | 该控制台说单元；**载体的存在就是依赖**：`depends on SERIAL \|\| USBSERIAL`（USART 控制台与 USB CDC 控制台都已接线，见下一节），另 `depends on HAVE_CHIPID \|\| MACH_HOST \|\| MACH_LINUX`（linux 没有芯片 id，身份由运行期 `-U <12 hex>` 给）；**不默认开** | `n` |
 | `MUX_CAN` | `src/Kconfig`（公共，**有 prompt**） | 设备半跑在 **CAN 字节流**上（`src/generic/canserial.c`：收端 `canserial_rx_task` 在 `command_find_block()` 前接 `mux_input`，发端 `console_sendf` 预留 `MUX_HEADER_BYTES` + `mux_out_header`、`mux_send` 整单元入队）；`depends on CANBUS && HAVE_CHIPID`、`select MUX`、**不默认开**（同 `MUX_SERIAL` 的理由：单元格式不是上游 klippy 主机说的格式）。CAN 单帧 admin 通道（`id=0x3f0`）不变，单元跑在**节点自己仲裁 id 的字节流**里 | `n` |
 | `UART` / `SERIAL_UART` | `src/Kconfig`（公共） | 配置期 UART 对象（`config_uart`）与「本架构的 UART 可交给桥当端口」 | — |
 | `BRIDGE` | `src/Kconfig`（公共） | 路由体；**资源够就默认具备**：`default y if MUX_SERIAL \|\| MUX_CAN` | — |
@@ -110,7 +110,7 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 - 只有 `CONFIG_UART` 才编 `uart.c`、`CONFIG_BRIDGE` 才编 `bridge.c`；默认（`=n`）根本不参与
   构建，宿主 API 的行为一个字节都不变。
 - **身份由主机指派**：MUX 按身份寻址，而库是主机加载的文件、自己没有可派生的东西（按路径派生还可能与其他设备撞车），所以身份由主机在 `init` 前用 `klipper_host_set_uuid()` 给出，不调就是全 `0`。已实现：存储 + `init` 时报一行 `mux uuid: <12 位十六进制>`；消费它的 MUX 设备半与桥半见下两节。
-- **控制台接线**（M1-P7 的 FW-2/FW-3）：`MUX_SERIAL` 现在是有 prompt 的公共能力，`depends on SERIAL`；架构无关层 `src/generic/serial_irq.c:113` 收端接 `mux_input`、`console_sendf`/`mux_send` 发端带头（与 host 逐字同构）；**linux 进程控制台也已接线**（`src/linux/console.c`：pty 读后先 `mux_input`、`console_sendf` 预留 `MUX_HEADER_BYTES` 并调 `mux_out_header`、`mux_send` 走自己的有界整单元发送队列；`src/linux/main.c` 新增 `-U <12 hex>` → `mux_set_uuid()`，在 `console_setup()` 之前——`test/configs/linuxprocess-mux.config` 就是它的构建目标）；各 arch 的 `chipid_init` 在 `CONFIG_MUX_SERIAL` 下用**与 CAN 同一套派生**（`src/generic/chipid_uuid.h`，`fasthash64` 芯片 id → 6 字节）设 `mux_set_uuid()`。**不默认开**：单元格式不是上游
+- **控制台接线**（M1-P7 的 FW-2/FW-3）：`MUX_SERIAL` 现在是有 prompt 的公共能力，`depends on SERIAL || USBSERIAL`；架构无关层 `src/generic/serial_irq.c:113` 收端接 `mux_input`、`console_sendf`/`mux_send` 发端带头（与 host 逐字同构）；**USB CDC 控制台（`src/generic/usb_cdc.c`）与 linux 进程控制台也已接线**（同一套两个接点：读后先 `mux_input`、`console_sendf` 预留 `MUX_HEADER_BYTES` 并调 `mux_out_header`、`mux_send` 走自己的有界整单元队列；linux 另加 `src/linux/main.c` 的 `-U <12 hex>` → `mux_set_uuid()`——`test/configs/linuxprocess-mux.config` 就是它的构建目标；USB CDC 侧已在 stm32f103xe 真板上验过扫描/身份/桥后 identify）；各 arch 的 `chipid_init` 在 `CONFIG_MUX_SERIAL` 下用**与 CAN 同一套派生**（`src/generic/chipid_uuid.h`，`fasthash64` 芯片 id → 6 字节）设 `mux_set_uuid()`。**不默认开**：单元格式不是上游
   klippy 主机说的格式，必须是刻意选择。
 - **设备半已实现**（固件 `src/mux.c`）：未分配时答 `0x00` 扫描（`0x3f1` 上带自己的 uuid）、
   按 `0x01 <uuid> <id>` 采纳 node id（幂等）、别人的 uuid 被指派到已持有的 id 时照 CAN 的

@@ -13,6 +13,9 @@
 #include "command.h" // output
 #include "generic/usbstd.h" // struct usb_device_descriptor
 #include "generic/usbstd_cdc.h" // struct usb_cdc_header_descriptor
+#if CONFIG_MUX_SERIAL
+#include "mux.h" // mux_input, mux_send, mux_out_header, MUX_HEADER_BYTES
+#endif
 #include "sched.h" // sched_wake_task
 #include "usb_cdc.h" // usb_notify_ep0
 
@@ -67,23 +70,58 @@ DECL_TASK(usb_bulk_in_task);
 void
 console_sendf(const struct command_encoder *ce, va_list args)
 {
+#if CONFIG_MUX_SERIAL
+    // In mux mode our own frames go out as units, the reply header naming us
+    // the way the incoming unit named us. mux_out_header writes nothing while
+    // this device has no node id, which keeps the old wire format: bare frames,
+    // the kind a path with one device on it carries. Same shape as the serial
+    // and CAN consoles (generic/serial_irq.c).
+    uint8_t header[MUX_HEADER_BYTES];
+    uint_fast8_t offset = mux_out_header(header);
+#else
+    uint_fast8_t offset = 0;
+#endif
+
     // Verify space for message
     uint_fast8_t tpos = transmit_pos;
-    if (tpos + READP(ce->min_size) > sizeof(transmit_buf))
+    if (tpos + READP(ce->min_size) + offset > sizeof(transmit_buf))
         // Not enough space for message
         return;
+#if CONFIG_MUX_SERIAL
+    memcpy(&transmit_buf[tpos], header, offset);
+#endif
 
-    // Generate message
-    uint8_t *buf = &transmit_buf[tpos];
+    // Generate message, behind the header our own frames go out with
+    uint8_t *buf = &transmit_buf[tpos + offset];
     uint_fast8_t msglen = command_encode_and_frame(
-        buf, sizeof(transmit_buf) - tpos, ce, args);
+        buf, sizeof(transmit_buf) - tpos - offset, ce, args);
     if (!msglen)
         return;
 
     // Start message transmit
-    transmit_pos = tpos + msglen;
+    transmit_pos = tpos + offset + msglen;
     usb_notify_bulk_in();
 }
+
+#if CONFIG_MUX_SERIAL
+// Bytes the mux sends upward: its answers on the admin channel and the units a
+// bridge forwards, whole units already (mux.h mux_send). They share the one
+// transmit buffer the responses drain, and are queued whole so that units never
+// interleave on the wire. The reachable writers are task/thread context (the
+// sender above, and the mux's own frame handling in the task) - a shutdown path
+// can reach console_sendf from an interrupt, the same narrow window the other
+// carriers have, and it costs at most the frame it interrupts.
+void
+mux_send(const uint8_t *bytes, uint_fast8_t len)
+{
+    uint_fast8_t tpos = transmit_pos;
+    if (tpos + len > sizeof(transmit_buf))
+        return;
+    memcpy(&transmit_buf[tpos], bytes, len);
+    transmit_pos = tpos + len;
+    usb_notify_bulk_in();
+}
+#endif // CONFIG_MUX_SERIAL
 
 
 /****************************************************************
@@ -91,7 +129,19 @@ console_sendf(const struct command_encoder *ce, va_list args)
  ****************************************************************/
 
 static struct task_wake usb_bulk_out_wake;
-static uint8_t receive_buf[128], receive_pos;
+// The read window is one USB CDC bulk packet, and reading only happens while a
+// whole window still fits (a short read would be lost, usbfs.c truncates to
+// max_len). A mux unit is at most MUX_HEADER_BYTES + MESSAGE_MAX bytes, so the
+// buffer must hold one window *plus* one whole unit: were it smaller, a unit
+// left incomplete by a 64+1 packet split could never be extended, and the
+// console would stop reading input for good.
+#define RECEIVE_BUF_SIZE 192
+static uint8_t receive_buf[RECEIVE_BUF_SIZE], receive_pos;
+#if CONFIG_MUX_SERIAL
+_Static_assert(RECEIVE_BUF_SIZE
+               >= USB_CDC_EP_BULK_OUT_SIZE + MUX_HEADER_BYTES + MESSAGE_MAX,
+               "mux must not hold more than the read window can extend");
+#endif
 
 void
 usb_notify_bulk_out(void)
@@ -116,6 +166,24 @@ usb_bulk_out_task(void)
     } else {
         usb_notify_bulk_out();
     }
+#if CONFIG_MUX_SERIAL
+    // Resolve the units at the front before the frame parser reads the buffer,
+    // exactly as the serial and CAN consoles do (generic/serial_irq.c).
+    // mux_input answers the admin channel here - the scan reply, adopting the
+    // node id it is handed, the id-collision shutdown - and leaves one of our
+    // own frames at the front with its header stripped, which is what the
+    // parser then reads. A raw frame (a path with one device on it) is left
+    // alone, so the old wire format still works. A unit that has not arrived
+    // whole stops the parser here: its leading bytes are not a frame, and the
+    // parser reads exactly the mux's count, never the length we read at.
+    size_t count = rpos;
+    int ready = mux_input(receive_buf, &count);
+    rpos = count;
+    if (!ready) {
+        receive_pos = rpos;
+        return;
+    }
+#endif
     // Process a message block
     int_fast8_t ret = command_find_and_dispatch(receive_buf, rpos, &pop_count);
     if (ret) {

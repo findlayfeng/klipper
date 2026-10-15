@@ -79,10 +79,11 @@ config SERIAL_BAUD
 # (src/host/console.c, which HOST_MUX_SERIAL selects), the generic serial
 # console the micro-controller arches share (src/generic/serial_irq.c, which
 # linux also has a SERIAL for but does not use - it brings its own console in
-# src/linux/console.c), and that process console itself. That is the `depends on
-# SERIAL` below - a transport whose console has no such wiring (ar100, pru have
-# none of their own) has no SERIAL to depend on and cannot select it, so the
-# choice never becomes a link error.
+# src/linux/console.c), that process console itself, and the USB CDC console
+# (src/generic/usb_cdc.c). That is the `depends on SERIAL || USBSERIAL` below -
+# a transport whose console has no such wiring (ar100, pru have none of their
+# own) has no such symbol to depend on and cannot select it, so the choice never
+# becomes a link error.
 #
 # MUX_CAN, wherever CAN is selected (CANSERIAL or USBCANBUS, which is what
 # CANBUS means below). Its carrier is the byte stream generic/canserial.c
@@ -131,7 +132,7 @@ config MUX
     bool
 config MUX_SERIAL
     bool "Serial mux: address this console in a shared byte stream"
-    depends on SERIAL
+    depends on SERIAL || USBSERIAL
     depends on HAVE_CHIPID || MACH_HOST || MACH_LINUX
     select MUX
     help
