@@ -67,29 +67,45 @@ config SERIAL_BAUD
 # stream - it answers the scan/admin channel, adopts the node id it is handed,
 # and handles an id collision the way the CAN code does
 # (generic/canserial.c:can_id_conflict). Every firmware wants it, whatever
-# carries the stream: MUX_SERIAL today, MUX_CAN to follow.
+# carries the stream: MUX_SERIAL for the serial consoles, MUX_CAN for the byte
+# stream CAN's nodes reassemble (generic/canserial.c).
 #
-# MUX and MUX_SERIAL are capabilities, not per-arch selections: whoever has the
-# wiring selects them, and an arch without the wiring simply leaves them off.
-# The wiring lives with whoever carries the byte stream, so MUX_SERIAL is
-# offered wherever that carrier is: the host library's console task
+# MUX, MUX_SERIAL and MUX_CAN are capabilities, not per-arch selections: whoever
+# has the wiring selects them, and an arch without the wiring simply leaves them
+# off. The wiring lives with whoever carries the byte stream, so each carrier is
+# offered wherever that carrier is.
+#
+# MUX_SERIAL, wherever a console like it exists: the host library's console task
 # (src/host/console.c, which HOST_MUX_SERIAL selects), the generic serial
 # console the micro-controller arches share (src/generic/serial_irq.c, which
 # linux also has a SERIAL for but does not use - it brings its own console in
-# src/linux/console.c), and that process console itself.
-# That is the `depends on SERIAL` below - a transport whose console has no such
-# wiring (ar100, pru have none of their own) has no SERIAL to depend on and
-# cannot select it, so the choice never becomes a link error.
+# src/linux/console.c), and that process console itself. That is the `depends on
+# SERIAL` below - a transport whose console has no such wiring (ar100, pru have
+# none of their own) has no SERIAL to depend on and cannot select it, so the
+# choice never becomes a link error.
 #
-# The device also has to have an identity to answer a scan with, so MUX_SERIAL
-# asks for one as well (`depends on HAVE_CHIPID || MACH_HOST || MACH_LINUX`). On
-# a micro-controller the arch's chipid.c derives it from the chip id (the same
-# HAVE_CHIPID the USB serial number uses); the host library takes it from its
-# caller (klipper_host_set_uuid), and the linux process from its command line
-# (-U), so MACH_HOST and MACH_LINUX are the other ways to have one. An arch with
-# none of these - avr, hc32f460, simulator have no chipid.c - would answer with
-# an all-zero identity, which names nothing: the option is not offered there
-# rather than offered broken.
+# MUX_CAN, wherever CAN is selected (CANSERIAL or USBCANBUS, which is what
+# CANBUS means below). Its carrier is the byte stream generic/canserial.c
+# reassembles out of the frames on this node's own arbitration id, and it needs
+# one for a reason the serial carriers do not have: a bridge reached over CAN
+# carries several downstream devices' frames in that one byte stream, so a frame
+# with no unit header has nothing to attribute it to and nothing can be routed.
+# The single-frame admin channel on CANBUS_ID_ADMIN (0x3f0) is not that channel
+# and does not replace it - it stays the byte-level scan/bootloader conversation
+# it has always been, and the two do not collide (a header field value inside
+# the byte stream is not an arbitration id).
+#
+# The device also has to have an identity to answer a scan with, so both ask for
+# one: MUX_SERIAL as `depends on HAVE_CHIPID || MACH_HOST || MACH_LINUX`, MUX_CAN
+# as `depends on HAVE_CHIPID` - it is a micro-controller carrier, and its
+# identity is the same six bytes the CAN uuid is derived from
+# (generic/chipid_uuid.h). On a micro-controller the arch's chipid.c derives it
+# from the chip id (the same HAVE_CHIPID the USB serial number uses); the host
+# library takes it from its caller (klipper_host_set_uuid), and the linux
+# process from its command line (-U), so MACH_HOST and MACH_LINUX are the other
+# ways to have one. An arch with none of these - avr, hc32f460, simulator have
+# no chipid.c - would answer with an all-zero identity, which names nothing: the
+# option is not offered there rather than offered broken.
 #
 # It is off by default, on purpose. On a micro-controller it changes the
 # console's wire format from bare frames to units, and units are not what the
@@ -102,10 +118,10 @@ config SERIAL_BAUD
 # instance is one of them - and forwards each addressed unit to the port that
 # owns the id. A build that already has the mux half of a byte stream has what a
 # bridge needs, so BRIDGE comes with it (the same `default y if` shape CANBUS
-# uses below). MUX_SERIAL selects MUX, so the condition is `MUX && MUX_SERIAL`
-# written as the one term that implies the other - spelling both out makes
-# kconfig read `select MUX` and this default as a dependency loop. MUX_CAN does
-# not exist yet; it will count here too once it does.
+# uses below). Each carrier selects MUX, so the condition is spelled as the
+# terms that imply it - `MUX_SERIAL || MUX_CAN`. Writing `MUX &&` in front of a
+# term makes kconfig read that term's own `select MUX` and this default as a
+# dependency loop, and either term implies MUX by itself.
 #
 # Which ports the bridge can be given is the arch's to say. BRIDGE_PORT_SERIAL
 # is that: this arch's UART objects (src/uart.c) can be handed to the bridge as
@@ -134,10 +150,39 @@ config MUX_SERIAL
         Off by default. With it the console's wire format is units, not the
         bare frames the upstream klippy host speaks, so only a host that
         expects the mux should ever be pointed at this board.
+config MUX_CAN
+    bool "CAN byte stream mux: address this node in a shared byte stream"
+    depends on CANBUS
+    depends on HAVE_CHIPID
+    select MUX
+    help
+        Make the byte stream this build reassembles out of CAN speak the
+        serial mux: the bytes that arrive on this node's own arbitration id
+        are resolved as units (src/generic/canserial.c: mux_input), this node
+        answers a scan with its identity, adopts the node id it is handed,
+        heads its own frames with the reply header, and shuts down on an id
+        collision (src/mux.c). A build that speaks the mux is also a bridge
+        (BRIDGE's `default y if` below).
+
+        A CAN upstream has to carry units where a serial one only may: the
+        arbitration id names this node, so every frame behind it - one bridge
+        relaying several downstream devices - lands in the one byte stream,
+        and a frame with no header says nothing about which device sent it.
+        The single-frame admin channel (CANBUS_ID_ADMIN, 0x3f0) does not cover
+        that: it is addressed to nodes on the bus, not to the devices behind
+        this one, and it stays exactly the scan/bootloader conversation it has
+        always been.
+
+        Needs an identity to answer with: it is derived from the chip id (the
+        arch's chipid.c, HAVE_CHIPID), the same six bytes the canbus uuid is.
+
+        Off by default. With it the wire format is units, not the bare frames
+        the upstream klippy host speaks, so only a host that expects the mux
+        should ever be pointed at this board.
 config BRIDGE
     bool
     select MUX
-    default y if MUX_SERIAL
+    default y if MUX_SERIAL || MUX_CAN
 config BRIDGE_PORT_SERIAL
     bool
 

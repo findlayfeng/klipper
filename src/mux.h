@@ -164,8 +164,9 @@ uint_fast8_t mux_out_header(uint8_t *buf);
 //
 // This is the device's whole input path: whatever carries the stream (the host
 // library's console task in src/host/console.c, the serial consoles in
-// src/generic/serial_irq.c and src/linux/console.c) hands its bytes here before
-// the ordinary frame parser reads them. Admin units are
+// src/generic/serial_irq.c and src/linux/console.c, the byte stream CAN's nodes
+// reassemble in src/generic/canserial.c) hands its bytes here before the
+// ordinary frame parser reads them. Admin units are
 // answered or consumed; one of our own frames is left at the front with its
 // header stripped, which is the frame the parser then reads. Raw frames - a
 // path with one device on it - are left alone, which is what keeps the old wire
@@ -179,9 +180,10 @@ uint_fast8_t mux_out_header(uint8_t *buf);
 int mux_input(uint8_t *buf, size_t *len);
 
 // Bytes going upward: implemented by whoever carries the stream
-// (host/console.c, generic/serial_irq.c, linux/console.c), because only it
-// knows where the transmit buffer is. A frame of our own needs no hook - the
-// input side leaves it at the front of the caller's buffer, header stripped.
+// (host/console.c, generic/serial_irq.c, generic/canserial.c, linux/console.c),
+// because only it knows where the transmit buffer is. A frame of our own needs
+// no hook - the input side leaves it at the front of the caller's buffer,
+// header stripped.
 void mux_send(const uint8_t *bytes, uint_fast8_t len);
 
 #endif // mux.h

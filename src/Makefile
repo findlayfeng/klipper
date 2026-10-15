@@ -2,8 +2,9 @@
 
 src-y += sched.c command.c basecmd.c debugcmds.c
 
-# Serial mux: the unit format a shared byte stream carries (MUX_SERIAL).
-src-$(CONFIG_MUX_SERIAL) += mux.c
+# Serial mux: the unit format a shared byte stream carries (MUX_SERIAL, and
+# MUX_CAN for the byte stream CAN's nodes reassemble).
+src-$(CONFIG_MUX) += mux.c
 # Bridge: the router between the console's ports (BRIDGE).
 src-$(CONFIG_BRIDGE) += bridge.c
 # UART objects: the byte streams a host creates at configuration time and hands
