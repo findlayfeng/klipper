@@ -44,15 +44,33 @@
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
 #include <string.h> // memcmp, memcpy, memmove
-#include "autoconf.h" // CONFIG_BRIDGE
+#include "autoconf.h" // CONFIG_BRIDGE, CONFIG_MACH_HOST
 #include "bridge.h" // struct bridge_port_ops
 #include "command.h" // MESSAGE_MIN, MESSAGE_MAX
 #include "mux.h" // the mux unit format
+#if CONFIG_MACH_HOST
+#include "host/klipper_host.h" // KLIPPER_HOST_PORT_SLOTS
+#endif
 
 // Downstream ports are the UART objects the host creates at configuration
 // time (uart.c hands each one here); the table is a small fixed array
 // because nothing adds and removes ports at run time.
 #define BRIDGE_MAX_PORTS 4
+
+// On the host library the host names a tty per bridge port before klipper comes
+// up (klipper_host_port, host/host.c), and its table has one slot per port
+// (KLIPPER_HOST_PORT_SLOTS, host/klipper_host.h): a bridge with more ports than
+// that would leave the extra ports with no tty the host could name, and they
+// would open the path the library was built with instead. Only the host library
+// has the constraint - a micro-controller's bridge never sees the host's table -
+// so the header is read only in that build, and the two counts are otherwise
+// unrelated. Keep them from drifting apart silently.
+#if CONFIG_MACH_HOST
+#if BRIDGE_MAX_PORTS > KLIPPER_HOST_PORT_SLOTS
+#error "BRIDGE_MAX_PORTS exceeds KLIPPER_HOST_PORT_SLOTS: not every bridge port could be named a tty"
+#endif
+#endif
+
 // One uuid per device that has answered a scan; a handful is plenty.
 #define BRIDGE_UUID_SLOTS 16
 // Assignments made before the uuid's port is known, waiting for the probe.
