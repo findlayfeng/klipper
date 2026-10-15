@@ -132,10 +132,12 @@ console_receive_buffer(void)
 #if CONFIG_MUX_SERIAL
 // Where the console's own output queues up.
 //
-// The pty is non-blocking, so a write can take only part of what it is given -
-// and a unit split on the wire desynchronises the mux's two-byte parse, while a
-// unit dropped loses a response its caller is waiting for. Units are therefore
-// queued whole, and whatever the pty will not take right now stays in the queue
+// The pty is non-blocking, so a write can take only part of what it is given.
+// What must not happen is losing the tail: the mux receiver reassembles units
+// from the byte stream anyway, but a unit dropped here loses a response its
+// caller is waiting for, and a later write must not push another unit's bytes
+// into the gap. Units are therefore queued whole, and whatever the pty will not
+// take right now stays in the queue
 // for console_flush() on the next scheduler pass. The queue is bounded, and a
 // unit that does not fit is dropped and reported: waiting here would stall the
 // whole micro-controller, and a full queue means the host has stopped reading,

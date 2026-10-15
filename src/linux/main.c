@@ -131,7 +131,7 @@ main(int argc, char **argv)
         case 'U':
             if (parse_uuid(optarg, uuid)) {
                 fprintf(stderr, USAGE_FORMAT, argv[0]);
-                return 1;
+                return -1;
             }
             have_uuid = 1;
             break;

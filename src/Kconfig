@@ -74,8 +74,9 @@ config SERIAL_BAUD
 # The wiring lives with whoever carries the byte stream, so MUX_SERIAL is
 # offered wherever that carrier is: the host library's console task
 # (src/host/console.c, which HOST_MUX_SERIAL selects), the generic serial
-# console every CONFIG_SERIAL arch shares (src/generic/serial_irq.c, calling
-# mux_input/mux_send), and the linux process console (src/linux/console.c).
+# console the micro-controller arches share (src/generic/serial_irq.c, which
+# linux also has a SERIAL for but does not use - it brings its own console in
+# src/linux/console.c), and that process console itself.
 # That is the `depends on SERIAL` below - a transport whose console has no such
 # wiring (ar100, pru have none of their own) has no SERIAL to depend on and
 # cannot select it, so the choice never becomes a link error.
