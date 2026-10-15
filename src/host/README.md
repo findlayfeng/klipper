@@ -98,10 +98,13 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 
 已经实现的是**整条链路**——打开端口、把端口接进控制台、按 id 路由：
 
-- **端口在配置期由主机声明**：主机发 `config_uart oid=%c baud=%u`（开端口并置 raw 8N1，
-  **参数来自命令**，路径仍是部署期的 `CONFIG_HOST_BRIDGE_SERIAL_PATH`）与
-  `config_bridge_port oid=%c uart=%c`（把该 UART 对象接成桥的一个端口，**端口 `index`
-  = 声明顺序**）。`klipper_host_init()` 只初始化库，**不再打开 tty、也不再因它失败**。
+- **端口在配置期由主机声明**：主机发 `config_uart oid=%c baud=%u slot=%c`（开端口并置 raw 8N1，
+  **参数来自命令**；`slot` 就是要用哪个端口槽）与 `config_bridge_port oid=%c uart=%c`（把该 UART
+  对象接成桥的一个端口，**端口 `index` = 声明顺序**，也就是 `config_uart` 里那个 `slot`——
+  **一处计数**）。`klipper_host_init()` 只初始化库，**不再打开 tty、也不再因它失败**。
+- **tty 路径由主机在 `init` 前按端口槽登记**：`klipper_host_port(slot, path)`（`klipper_host_init()`
+  之前调用，最多 `KLIPPER_HOST_PORT_SLOTS` 个槽）。某个槽没被登记时回落
+  `CONFIG_HOST_BRIDGE_SERIAL_PATH`（那现在是**兜底默认**，不再是唯一事实）。
 - **失败显式**：打不开/波特率不可设/端口数超限等一律 `shutdown("…")`，主机在**配置阶段**
   拿到点名错误（不再有「编译期端口表」，也没有静默降级）。
 - 只有 `CONFIG_UART` 才编 `uart.c`、`CONFIG_BRIDGE` 才编 `bridge.c`；默认（`=n`）根本不参与
@@ -189,9 +192,11 @@ make test     # 自检：缓冲区边界（burst.c）
   irq 模拟；`timer_dispatch_many()` 等来自 `generic/timer_irq.c`。
 - `mux.c` – 也是公共的：单元格式与设备半（上面「桥模式」一节）
 - `bridge.c`  – host 的 **UART 后端**（`CONFIG_UART` + `CONFIG_BRIDGE`）：`uart_backend_open()`
-  在**配置期**打开 `CONFIG_HOST_BRIDGE_SERIAL_PATH`、置 raw 8N1（速率经 `termios2`/`BOTHER`，
-  参数来自 `config_uart` 的 `baud`）、持有 fd 并把它作为桥端口交给 `config_bridge_port`；
-  默认不参与构建。设备身份由**主机指派**（`klipper_host_set_uuid`，不走路径派生）。
+  在**配置期**打开该端口槽的 tty——槽到路径的映射来自主机（`klipper_host_port`），没登记就回落
+  `CONFIG_HOST_BRIDGE_SERIAL_PATH`——置 raw 8N1（速率经 `termios2`/`BOTHER`，来自 `config_uart`
+  的 `baud`）、持有 fd 并把它作为桥端口交给 `config_bridge_port`；默认不参与构建。设备身份由
+  **主机指派**（`klipper_host_set_uuid`，不走路径派生）。本后端**只服务一路流**，第二个 UART
+  对象会被拒（`UART_OPEN_BUSY`）。
 - `uart.c`   – 公共的**配置期 UART 对象**（`config_uart`/`config_bridge_port`）；后端 seam
   `uart_backend_open`/`uart_backend_port_ops`/`uart_backend_set_port`，失败一律 `shutdown()`。
 - `klipper_host.h` / `internal.h` – 公开 API / 内部接口。
