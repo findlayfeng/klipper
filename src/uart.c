@@ -32,10 +32,10 @@ struct uart_s {
     void *ctx;
 };
 
-// Create a UART object at the rate the host asks for, on the bridge port ("path"
-// on the wire) the object belongs to. A duplicate oid is refused by oid_alloc;
-// everything else that can go wrong is opening the stream, and each outcome gets
-// its own message so the host learns why.
+// Create a UART object at the rate the host asks for, on the bridge port (the
+// "slot" on the wire) the object belongs to. A duplicate oid is refused by
+// oid_alloc; everything else that can go wrong is opening the stream, and each
+// outcome gets its own message so the host learns why.
 //
 // The slot is the port's index on the bridge, the same number the host named the
 // port's tty with before the device came up (klipper_host_port), so the backend
@@ -63,7 +63,7 @@ command_config_uart(uint32_t *args)
         shutdown("config_uart: the UART device could not be opened");
     }
 }
-DECL_COMMAND(command_config_uart, "config_uart oid=%c baud=%u path=%c");
+DECL_COMMAND(command_config_uart, "config_uart oid=%c baud=%u slot=%c");
 
 #if CONFIG_BRIDGE
 // A bridge port object: the oid the host names the port by, and the UART object
