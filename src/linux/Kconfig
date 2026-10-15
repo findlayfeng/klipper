@@ -16,6 +16,9 @@ config BOARD_DIRECTORY
     string
     default "linux"
 
+config SERIAL
+    default y
+
 config CLOCK_FREQ
     int
     default 50000000
