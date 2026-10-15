@@ -63,7 +63,14 @@ include src/Makefile
 # those symbols now overlap (MUX_SERIAL on a USB CDC console is a real build).
 # Without this the file is linked twice (multiple definitions) and, worse, its
 # commands are counted twice in compile_time_request.
-src-y := $(sort $(src-y))
+#
+# Deduplicated **keeping the first occurrence's place**, not sorted: the
+# dictionary's message ids are handed out in `src-y` order (buildcommands.py),
+# so sorting would renumber every target's dictionary - ids that tests, golden
+# data and any recorded wire shape refer to. Dropping duplicates is the whole
+# fix; the order is part of the ABI.
+uniq = $(if $1,$(firstword $1) $(call uniq,$(filter-out $(firstword $1),$1)))
+src-y := $(call uniq,$(src-y))
 
 ################ Main build rules
 
