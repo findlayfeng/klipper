@@ -149,7 +149,7 @@ irq_wait(void)
     }
     irq_poll();
 #if CONFIG_BRIDGE && CONFIG_BRIDGE_PORT_SERIAL
-    // The bridge's downstream port is one more source of input; poll it on the
+    // The bridge's downstream ports are more sources of input; poll them on the
     // same beat, while the loop has nothing else to do.
     bridge_poll();
 #endif

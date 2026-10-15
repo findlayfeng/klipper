@@ -16,8 +16,9 @@
 //
 // The rate and the port's tty are configuration facts, not build-time ones:
 // config_uart carries the rate and the port slot, so a rate the build cannot
-// offer, a stream it cannot open, or a second object it cannot serve is reported
-// while the host is configuring - not left behind as a dead port later.
+// offer, a stream it cannot open, or a second object on a slot already open is
+// reported while the host is configuring - not left behind as a dead port
+// later.
 
 struct uart_s;
 
@@ -26,14 +27,15 @@ enum uart_open_result {
     UART_OPEN_OK = 0,
     UART_OPEN_NO_DEVICE,   // the byte stream could not be opened at all
     UART_OPEN_BAD_BAUD,    // opened, but the rate could not be set on it
-    UART_OPEN_BUSY,        // this arch's byte stream already carries a UART
+    UART_OPEN_BUSY,        // the port slot already carries a UART object
 };
 
 // Open the byte stream behind 'u' at 'baud' on bridge port 'slot' - the slot the
 // object was created with, whose tty the host named before the device came up
-// (klipper_host_port). Called once per object, when the host configures it. The
-// result names why a failure failed; the caller reports it (shutdown()) with a
-// message of its own.
+// (klipper_host_port). Called once per object, when the host configures it; a
+// slot out of the host's range, or one another object already opened, is
+// refused instead of served. The result names why a failure failed; the caller
+// reports it (shutdown()) with a message of its own.
 enum uart_open_result uart_backend_open(struct uart_s *u, uint32_t baud, int slot);
 
 #if CONFIG_BRIDGE

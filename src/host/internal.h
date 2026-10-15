@@ -19,7 +19,7 @@ void klipper_console_unlock(void);
 // klipper is asked to shut down)
 void klipper_console_wake(void);
 
-// bridge.c - read the bridge's downstream port and feed it to the router. Called
+// bridge.c - read the bridge's downstream ports and feed them to the router. Called
 // from irq_wait() while the task loop is idle, the way src/linux/console.c
 // polls its tty from console_sleep().
 void bridge_poll(void);

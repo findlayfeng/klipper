@@ -195,8 +195,9 @@ make test     # 自检：缓冲区边界（burst.c）
   在**配置期**打开该端口槽的 tty——槽到路径的映射来自主机（`klipper_host_port`），没登记就回落
   `CONFIG_HOST_BRIDGE_SERIAL_PATH`——置 raw 8N1（速率经 `termios2`/`BOTHER`，来自 `config_uart`
   的 `baud`）、持有 fd 并把它作为桥端口交给 `config_bridge_port`；默认不参与构建。设备身份由
-  **主机指派**（`klipper_host_set_uuid`，不走路径派生）。本后端**只服务一路流**，第二个 UART
-  对象会被拒（`UART_OPEN_BUSY`）。
+  **主机指派**（`klipper_host_set_uuid`，不走路径派生）。本后端**按端口槽各开一路流**（≤
+  `KLIPPER_HOST_PORT_SLOTS`，每槽独立 fd、整帧发送队列与 reset 状态机），**同槽**第二个 UART
+  对象才被拒（`UART_OPEN_BUSY`）；slot 越界显式拒绝（不走路径回落）。
 - `uart.c`   – 公共的**配置期 UART 对象**（`config_uart`/`config_bridge_port`）；后端 seam
   `uart_backend_open`/`uart_backend_port_ops`/`uart_backend_set_port`，失败一律 `shutdown()`。
 - `klipper_host.h` / `internal.h` – 公开 API / 内部接口。

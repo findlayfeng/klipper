@@ -57,7 +57,7 @@ command_config_uart(uint32_t *args)
     case UART_OPEN_BAD_BAUD:
         shutdown("config_uart: the UART cannot be set to the requested baud");
     case UART_OPEN_BUSY:
-        shutdown("config_uart: this build's UART is already in use");
+        shutdown("config_uart: the port slot is already in use");
     case UART_OPEN_NO_DEVICE:
     default:
         shutdown("config_uart: the UART device could not be opened");

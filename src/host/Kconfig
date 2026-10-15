@@ -83,8 +83,8 @@ config HOST_BRIDGE_SERIAL_PATH
         comes up), so this is only the fallback a host that stays silent gets -
         and the path a bridge build opens with no host configuration at all.
         /dev/ttyACM0 is the conventional Linux default (klipper's example
-        configs all name it). This backend serves one stream, so a second UART
-        object is refused.
+        configs all name it). Slots are served independently, each with its own
+        stream; a second UART object on a slot already open is refused.
 
 config HOST_AR_LIBRARY
     bool "Build as AR static library (.a)"
