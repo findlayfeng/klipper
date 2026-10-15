@@ -143,8 +143,12 @@ console_sendf(const struct command_encoder *ce, va_list args)
 // interleave on the wire.
 //
 // A unit is queued or dropped, never cut short: a unit the peer cannot resolve
-// is worse than one that never went out, since the protocol resends what it
-// gets no answer for. So the room is verified exactly the way console_sendf
+// is worse than one that never went out. Command frames are resent when they go
+// unanswered, so dropping one costs a retry; the admin/handshake units are
+// fire-and-forget (the host scan is a single broadcast with a deadline, and the
+// port-level commands have no reply either), so those are dropped outright - the
+// alternative would be blocking the scheduler on a host that is not reading.
+// So the room is verified exactly the way console_sendf
 // verifies it - compact the already-sent prefix of the buffer, or report "not
 // enough space" when even the message alone does not fit - and nothing here
 // blocks: the bytes are queued in the buffer the tx task drains, which is how

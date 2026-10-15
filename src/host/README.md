@@ -85,16 +85,16 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 | `MUX_SERIAL` | `src/Kconfig`（公共；无 prompt） | 设备半跑在串口/字节流上 | — |
 | `BRIDGE` | `src/Kconfig`（公共；无 prompt） | **桥半**：端口表 + 路由 + 扇出（`select MUX`） | — |
 | `MUX_SERIAL` | `src/Kconfig`（公共，**有 prompt**） | 该控制台说单元（can 等承载另行 select）；MCU 侧已接线，**不默认开**；`depends on HAVE_CHIPID || MACH_HOST || MACH_LINUX`（linux 没有芯片 id，身份由运行期 `-U <12 hex>` 给，见下一节） | `n` |
+| `MUX_CAN` | `src/Kconfig`（公共，**有 prompt**） | 设备半跑在 **CAN 字节流**上（`src/generic/canserial.c`：收端 `canserial_rx_task` 在 `command_find_block()` 前接 `mux_input`，发端 `console_sendf` 预留 `MUX_HEADER_BYTES` + `mux_out_header`、`mux_send` 整单元入队）；`depends on CANBUS && HAVE_CHIPID`、`select MUX`、**不默认开**（同 `MUX_SERIAL` 的理由：单元格式不是上游 klippy 主机说的格式）。CAN 单帧 admin 通道（`id=0x3f0`）不变，单元跑在**节点自己仲裁 id 的字节流**里 | `n` |
 | `UART` / `SERIAL_UART` | `src/Kconfig`（公共） | 配置期 UART 对象（`config_uart`）与「本架构的 UART 可交给桥当端口」 | — |
-| `BRIDGE` | `src/Kconfig`（公共） | 路由体；**资源够就默认具备**：`default y if MUX_SERIAL` | — |
+| `BRIDGE` | `src/Kconfig`（公共） | 路由体；**资源够就默认具备**：`default y if MUX_SERIAL \|\| MUX_CAN` | — |
 | `HOST_BRIDGE_SERIAL` | `src/host/Kconfig` | host 上的可见开关，选上 MUX_SERIAL/BRIDGE/UART | `n` |
 | `HOST_MUX_SERIAL` | `src/host/Kconfig` | 只说 mux、**没有**下游端口的 host：`select MUX_SERIAL`，与上面那个并存不冲突 | `n` |
 | `HOST_BRIDGE_SERIAL_PATH` | `src/host/Kconfig` | 打开的 tty 路径 | `/dev/ttyACM0` |
 
 架构只回答"桥的是哪个端口"：host 没有固定端口表，所以是**路径字符串**（默认
 `/dev/ttyACM0`）；微控制器将来照自己给控制台选 UART 的做法给一份 `choice` 备选串口
-（`AVR_SERIAL_UART*` / `STM32_SERIAL_USART*` 那种）。`MUX_CAN` / `BRIDGE_PORT_CAN`
-（CAN 也是端口，见 `src/Kconfig` 注释）随 CAN 后端一起落地。
+（`AVR_SERIAL_UART*` / `STM32_SERIAL_USART*` 那种）。`MUX_CAN`（CAN 也是载体的一个，已落地，见上表）与 `BRIDGE_PORT_CAN`（片上的 CAN 当下游**端口**，需端口后端）不属同一件事：后者尚缺，随 CAN 端口后端一起落地。
 
 已经实现的是**整条链路**——打开端口、把端口接进控制台、按 id 路由：
 

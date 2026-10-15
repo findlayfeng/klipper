@@ -179,6 +179,13 @@ config MUX_CAN
         Off by default. With it the wire format is units, not the bare frames
         the upstream klippy host speaks, so only a host that expects the mux
         should ever be pointed at this board.
+
+        MUX_SERIAL and MUX_CAN never hold at once in practice: an arch that
+        offers CAN puts its serial and CAN transports in one `choice`, so
+        SERIAL and CANBUS exclude each other. That is also what makes
+        `src-$(CONFIG_MUX) += mux.c` in src/Makefile list mux.c exactly once;
+        an arch with both carriers would otherwise list a source twice and
+        duplicate the objects.
 config BRIDGE
     bool
     select MUX
