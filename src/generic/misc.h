@@ -20,4 +20,13 @@ uint16_t crc16_ccitt(uint8_t *buf, uint_fast8_t len);
 
 void bootloader_request(void);
 
+// Restart this firmware. Every arch that defines command_reset defines this
+// where it already did - generic/armcm_reset.c, atsam/main.c, ar100/main.c, and
+// avr/watchdog.c (which exists only with CONFIG_AVR_WATCHDOG) - and linux's is
+// the re-exec its command_config_reset already performed. The mux's
+// RESTART_DEVICE command calls it (mux.c). The host library defines it as a
+// no-op: the firmware it carries is the host process itself, which only the
+// host can restart (host/host.c).
+void mcu_restart(void);
+
 #endif // misc.h

@@ -15,7 +15,7 @@
 #include "autoconf.h" // CONFIG_MUX_SERIAL, CONFIG_BRIDGE
 #include "bridge.h" // bridge_admin_unit, bridge_route_unit
 #include "command.h" // MESSAGE_*, MESSAGE_SYNC
-#include "generic/misc.h" // crc16_ccitt
+#include "generic/misc.h" // crc16_ccitt, mcu_restart
 #include "mux.h" // the mux unit format
 #include "sched.h" // shutdown
 
@@ -344,15 +344,16 @@ mux_out_header(uint8_t *buf)
     return mux_encode_header(buf, mux_reply_arb_id(mux_assigned));
 }
 
-// A RESET_DEVICE that reached this device: ask for the bootloader the way CAN's
-// CANBUS_CMD_REQUEST_BOOTLOADER does (generic/canserial.c). The command carries
-// a port index for a bridge to route by (mux.h MUX_CMD_RESET_DEVICE); on this
-// wire the routing has already named this device, so the index means nothing
-// here and is read no further. There is no uuid to check either - the port
-// index is the addressing - and a build with no bootloader simply does nothing,
-// the same no-op canserial.c makes without the config.
+// A REQUEST_BOOTLOADER that reached this device: ask for the bootloader the way
+// CAN's CANBUS_CMD_REQUEST_BOOTLOADER does (generic/canserial.c). The command
+// carries a port index for a bridge to route by (mux.h
+// MUX_CMD_REQUEST_BOOTLOADER); on this wire the routing has already named this
+// device, so the index means nothing here and is read no further. There is no
+// uuid to check either - the port index is the addressing - and a build with no
+// bootloader simply does nothing, the same no-op canserial.c makes without the
+// config.
 static void
-mux_process_reset_device(void)
+mux_process_request_bootloader(void)
 {
     if (!CONFIG_HAVE_BOOTLOADER_REQUEST)
         return;
@@ -409,12 +410,19 @@ mux_admin_unit(uint8_t *frame, uint_fast8_t frame_len)
             // give it up and say so, rather than answer for two boards.
             goto conflict;
         return;
-    case MUX_CMD_RESET_DEVICE:
+    case MUX_CMD_REQUEST_BOOTLOADER:
         // CAN's CANBUS_CMD_REQUEST_BOOTLOADER by value and meaning: this device
-        // resets itself. The port index the command carries is a bridge's
-        // routing (see mux_process_reset_device above), so it is read no
-        // further here.
-        mux_process_reset_device();
+        // hands itself to its bootloader, for a flashing tool to write it. The
+        // port index the command carries is a bridge's routing (see
+        // mux_process_request_bootloader above), so it is read no further here.
+        mux_process_request_bootloader();
+        return;
+    case MUX_CMD_RESTART_DEVICE:
+        // The other reset, and a different destination: restart the firmware
+        // itself (mcu_restart, the body of the `reset` command) and come back
+        // up, rather than wait in a bootloader. The port index is the bridge's
+        // routing here too, so it is read no further.
+        mcu_restart();
         return;
     default:
         return;

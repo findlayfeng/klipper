@@ -246,8 +246,9 @@ bridge_forward_to_port(int index, uint32_t arb, const uint8_t *frame
     if (!(p->flags & MUX_PORT_UNITS)) {
         // A legacy device predates the mux: its frame goes out without the
         // header, and its parser will reject the pseudo-frame's 0x20 sequence
-        // byte - which is exactly right. A device with no admin channel has no
-        // RESET_DEVICE to execute, so this can only ever reach a port whose
+        // byte - which is exactly right. A device with no admin channel
+        // executes neither of the device commands (REQUEST_BOOTLOADER,
+        // RESTART_DEVICE), so this can only ever take effect on a port whose
         // device speaks units; a port with no such device is reset at the line
         // instead (RESET_PORT, mux.h MUX_CMD_RESET_PORT).
         p->ops.write(p->ops.ctx, frame, frame_len);
@@ -452,12 +453,16 @@ bridge_admin_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
             bridge_set_port_nodeid(kxid.args, kxid.args_len);
             return 1;
         }
-        if (kxid.args[0] == MUX_CMD_RESET_DEVICE) {
-            // A reset aimed at one device, behind the port the host names
-            // ([0x02][index]): forward the command to that port alone and
-            // consume it - no fan-out, no copy to the self device half, no
-            // receipt. The device behind the port executes it on its own side
-            // of the wire; the self device never resets here (the consumed
+        if (kxid.args[0] == MUX_CMD_REQUEST_BOOTLOADER
+            || kxid.args[0] == MUX_CMD_RESTART_DEVICE) {
+            // A device command aimed at one device, behind the port the host
+            // names ([0x02][index] or [0x05][index]): forward it to that port
+            // alone and consume it - no fan-out, no copy to the self device
+            // half, no receipt. The two share this arm because the bridge's
+            // part is the same routing either way; what the device does with
+            // it - wait in its bootloader, or restart its firmware - is the
+            // device's business, on its own side of the wire. The self device
+            // is not behind a port and is not a target here (the consumed
             // return short-circuits the local handler, and a bridge reset is a
             // later concern). An index that names no port is dropped silently.
             if (kxid.args_len >= 2) {

@@ -6,7 +6,7 @@
 
 #include "board/armcm_boot.h" // armcm_main
 #include "board/irq.h" // irq_disable
-#include "board/misc.h" // bootloader_request
+#include "board/misc.h" // bootloader_request, mcu_restart
 #include "command.h" // DECL_COMMAND_FLAGS
 #include "internal.h" // WDT
 #include "sched.h" // sched_main
@@ -83,13 +83,23 @@ get_pclock_frequency(uint32_t id)
                     | RSTC_CR_PERRST)
 #endif
 
+// Restart this firmware: pulse the processor reset, which is the body of the
+// `reset` command and what the mux's RESTART_DEVICE calls (mux.c). The arch has
+// no bootloader ask to keep out of the way - bootloader_request below is ROM
+// boot, taken only when it is called.
 void
-command_reset(uint32_t *args)
+mcu_restart(void)
 {
     irq_disable();
     RSTC->RSTC_CR = RST_PARAMS;
     for (;;)
         ;
+}
+
+void
+command_reset(uint32_t *args)
+{
+    mcu_restart();
 }
 DECL_COMMAND_FLAGS(command_reset, HF_IN_SHUTDOWN, "reset");
 

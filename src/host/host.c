@@ -22,7 +22,7 @@
 #include "autoconf.h" // CONFIG_MUX_SERIAL
 #include "basecmd.h" // stats_update
 #include "board/irq.h" // irq_poll
-#include "board/misc.h" // timer_read_time
+#include "board/misc.h" // timer_read_time, mcu_restart
 #include "sched.h" // sched_main, sched_is_shutdown
 #include "internal.h" // klipper_console_unlock
 #include "mux.h" // mux_set_uuid, mux_uuid
@@ -203,4 +203,25 @@ klipper_host_step(void)
     ctr_run_taskfuncs();
     uint32_t cur = timer_read_time();
     stats_update(start, cur);
+}
+
+/****************************************************************
+ * Restart
+ ****************************************************************/
+
+// Restart this firmware: there is nothing here that could.
+//
+// The firmware this library carries is the process it was linked into, so a
+// restart is the host's call, not the library's: it is klipper_host_shutdown()
+// plus the host bringing the library up again that means a restart here, and a
+// library that shut itself down recovers the way the header comment has it
+// (config_reset / clear_shutdown), inside the same process.
+//
+// So the mux's RESTART_DEVICE command (mux.c) is accepted and does nothing -
+// the same shape a board with no bootloader gives that command's sibling,
+// REQUEST_BOOTLOADER: the command is understood, and this carrier cannot carry
+// it out.
+void
+mcu_restart(void)
+{
 }

@@ -10,7 +10,7 @@
 #include <unistd.h> // getopt
 #include <sys/mman.h> // mlockall MCL_CURRENT MCL_FUTURE
 #include "autoconf.h" // CONFIG_MUX_SERIAL
-#include "board/misc.h" // console_sendf
+#include "board/misc.h" // console_sendf, mcu_restart
 #include "command.h" // DECL_CONSTANT
 #include "internal.h" // console_setup
 #if CONFIG_MUX_SERIAL
@@ -52,13 +52,26 @@ realtime_setup(void)
 
 static char **orig_argv;
 
+// Restart this firmware: re-exec this process with the same argument vector it
+// was started with, so it rebuilds its pty and re-links the device node the
+// same way the first start did. The mux's RESTART_DEVICE command (mux.c) is a
+// restart said outright, so this one carries no precondition of its own.
+void
+mcu_restart(void)
+{
+    int ret = execv(orig_argv[0], orig_argv);
+    report_errno("execv", ret);
+}
+
 void
 command_config_reset(uint32_t *args)
 {
+    // That the command is only offered to a host that has found the firmware
+    // shut down is the command's own convention (the klipper host asks for a
+    // restart only after a shutdown), not a property of restarting.
     if (! sched_is_shutdown())
         shutdown("config_reset only available when shutdown");
-    int ret = execv(orig_argv[0], orig_argv);
-    report_errno("execv", ret);
+    mcu_restart();
 }
 DECL_COMMAND_FLAGS(command_config_reset, HF_IN_SHUTDOWN, "config_reset");
 

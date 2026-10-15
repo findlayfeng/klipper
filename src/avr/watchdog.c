@@ -47,12 +47,25 @@ watchdog_early_init(void)
 }
 
 // Support reset on AVR via the watchdog timer
+//
+// Restart this firmware: hold the watchdog to a timeout no program can reach,
+// which is the body of the `reset` command and what the mux's RESTART_DEVICE
+// would call (mux.c). This file is avr's home of both and is compiled only with
+// CONFIG_AVR_WATCHDOG - the arch is reset by its watchdog or not at all. (avr
+// offers no mux to restart a device through: it has no chipid.c to answer a
+// scan with, so MUX_SERIAL is not offered there.)
 void
-command_reset(uint32_t *args)
+mcu_restart(void)
 {
     irq_disable();
     wdt_enable(WDTO_15MS);
     for (;;)
         ;
+}
+
+void
+command_reset(uint32_t *args)
+{
+    mcu_restart();
 }
 DECL_COMMAND_FLAGS(command_reset, HF_IN_SHUTDOWN, "reset");

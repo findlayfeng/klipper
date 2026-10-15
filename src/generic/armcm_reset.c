@@ -41,10 +41,21 @@ try_request_canboot(void)
     canboot_reset(CANBOOT_REQUEST);
 }
 
+// Restart this firmware - the body of the `reset` command, which the mux's
+// RESTART_DEVICE also calls (mux.c). CANBOOT_BYPASS is what makes it a restart:
+// a canboot that is installed is told not to arm itself, so the device comes
+// back up instead of waiting in its bootloader (try_request_canboot above and
+// the mux's REQUEST_BOOTLOADER are that other ask).
 void
-command_reset(uint32_t *args)
+mcu_restart(void)
 {
     canboot_reset(CANBOOT_BYPASS);
     NVIC_SystemReset();
+}
+
+void
+command_reset(uint32_t *args)
+{
+    mcu_restart();
 }
 DECL_COMMAND_FLAGS(command_reset, HF_IN_SHUTDOWN, "reset");

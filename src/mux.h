@@ -46,13 +46,15 @@ int mux_is_reply_arb(uint32_t arb);
 //
 //   0x00 QUERY_UNASSIGNED   []                  every unassigned device answers
 //   0x01 SET_KLIPPER_NODEID [uuid][id]          the device `uuid` adopts `id`
-//   0x02 RESET_DEVICE       [index]             the device behind port `index`
-//                                               resets itself: a bridge routes
-//                                               it by `index` to that port and
-//                                               the device executes it; the
-//                                               device half also runs it on a
-//                                               board with no bridge (the index
-//                                               is then read no further)
+//   0x02 REQUEST_BOOTLOADER [index]             the device behind port `index`
+//                                               asks for its bootloader - the
+//                                               flashing tool's command: a
+//                                               bridge routes it by `index` to
+//                                               that port and the device
+//                                               executes it; the device half
+//                                               also runs it on a board with no
+//                                               bridge (the index is then read
+//                                               no further)
 //   0x03 SET_PORT_NODEID    [index][id][flags]  the bridge builds its port
 //                                               tables; stays on the bridge,
 //                                               never forwarded
@@ -60,24 +62,34 @@ int mux_is_reply_arb(uint32_t arb);
 //                                               port `index` - the only reset a
 //                                               device with no admin channel of
 //                                               its own can get
+//   0x05 RESTART_DEVICE     [index]             the device behind port `index`
+//                                               restarts its own firmware: the
+//                                               same routing as 0x02, but the
+//                                               device comes back up instead of
+//                                               waiting in a bootloader
 //
 // and one response:
 //
 //   0x20 NEED_NODEID        [uuid][app?]        an unassigned device's answer
 //                                               to a scan
 //
-// 0x02 names a device (routed by the bridge, executed by the device); 0x03 and
-// 0x04 name the bridge itself and never travel downstream. The three (0x02,
-// 0x03, 0x04) are addressed by the port index the identify dictionary reports;
-// a payload that is short or names no such port is dropped in silence, and none
-// of these carries a receipt.
+// 0x02 and 0x05 name a device (routed by the bridge the same way, executed by
+// the device); 0x03 and 0x04 name the bridge itself and never travel
+// downstream. The four (0x02, 0x03, 0x04, 0x05) are addressed by the port index
+// the identify dictionary reports; a payload that is short or names no such
+// port is dropped in silence, and none of these carries a receipt.
 //
-// MUX_CMD_RESET_DEVICE is CAN's CANBUS_CMD_REQUEST_BOOTLOADER by value and
-// meaning (generic/canserial.c): the device resets itself. The port-level
-// commands are addressed to a bridge, not to a device.
-#define MUX_CMD_RESET_DEVICE 0x02
+// The two device commands are the two resets a device can be asked for, and
+// they differ in where it ends up: MUX_CMD_REQUEST_BOOTLOADER is CAN's
+// CANBUS_CMD_REQUEST_BOOTLOADER by value and meaning (generic/canserial.c) and
+// leaves the device in its bootloader, for a flashing tool to write it;
+// MUX_CMD_RESTART_DEVICE restarts the firmware itself (mcu_restart(), the
+// body of the `reset` command) and is what names a device that should come back
+// up. The port-level commands are addressed to a bridge, not to a device.
+#define MUX_CMD_REQUEST_BOOTLOADER 0x02
 #define MUX_CMD_SET_PORT_NODEID 0x03
 #define MUX_CMD_RESET_PORT 0x04
+#define MUX_CMD_RESTART_DEVICE 0x05
 
 // SET_PORT_NODEID's payload is four bytes: [0x03][index][id][flags]. `index` is
 // a 0-based port index (a port the port table does not list is dropped), `id`

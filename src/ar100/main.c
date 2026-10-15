@@ -128,13 +128,22 @@ void restore_data(void)
     memcpy (&__data_start, &__copy_start, &__data_end - &__data_start);
 }
 
+// Restart this firmware: give the data segments back the way the bootloader
+// left them and jump to the reset vector - the body of the `reset` command,
+// which the mux's RESTART_DEVICE also calls (mux.c).
 void
-command_reset(uint32_t *args)
+mcu_restart(void)
 {
     timer_reset();
     restore_data();
     void *reset = (void *)RESET_VECTOR;
     goto *reset;
+}
+
+void
+command_reset(uint32_t *args)
+{
+    mcu_restart();
 }
 DECL_COMMAND_FLAGS(command_reset, HF_IN_SHUTDOWN, "reset");
 
