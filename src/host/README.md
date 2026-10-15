@@ -135,7 +135,10 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
   - **端口级命令族（M1-P2）**：admin 信道新增三条面向桥自己的命令，全部**无回执、不下发**
     （桥的 admin 处理函数以「是否消费」返回值短路本机设备半，`0x00`/`0x01` 的扇出与本机处理
     逐位不变）：`SET_PORT_NODEID [0x03][index][id][flags]` 建 `id → 端口` 表并记该口 flags
-    （幂等，非法 index/id 静默丢弃）；`RESET_DEVICE [0x02][index]` 只转发到该口（UNITS 口带头、
+    （幂等，非法 index/id 静默丢弃）；`REQUEST_BOOTLOADER [0x02][index]`（刷写工具用）与
+    `RESTART_DEVICE [0x05][index]`（重启固件）共用一条转发臂：只发到该口（UNITS 口带头、legacy 口剥头），
+    **但 index 指不到本机任何在用端口时不消费、穿透给本机设备半**——「每个 mux 构建自己也是桥构建」，
+    主机经别的桥找上本板时命令就是该本板执行的（真机验证过：`admin` → 板子真的重启）；
     legacy 口剥头——legacy 设备拒 seq `0x20` 属预期，无 admin 的 legacy 口只能走下一条），
     无桥的板由设备半自己执行（`CONFIG_HAVE_BOOTLOADER_REQUEST` 守卫，index 字节忽略）；
     `RESET_PORT [0x04][index]` 经 `bridge_port_ops.reset` 钩子（NULL=不支持）做线级复位——
