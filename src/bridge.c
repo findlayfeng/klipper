@@ -457,19 +457,25 @@ bridge_admin_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
             || kxid.args[0] == MUX_CMD_RESTART_DEVICE) {
             // A device command aimed at one device, behind the port the host
             // names ([0x02][index] or [0x05][index]): forward it to that port
-            // alone and consume it - no fan-out, no copy to the self device
-            // half, no receipt. The two share this arm because the bridge's
-            // part is the same routing either way; what the device does with
-            // it - wait in its bootloader, or restart its firmware - is the
-            // device's business, on its own side of the wire. The self device
-            // is not behind a port and is not a target here (the consumed
-            // return short-circuits the local handler, and a bridge reset is a
-            // later concern). An index that names no port is dropped silently.
-            if (kxid.args_len >= 2) {
-                uint_fast8_t index = kxid.args[1];
-                if (index < BRIDGE_MAX_PORTS && bridge_ports[index].in_use)
-                    bridge_forward_to_port(index, arb, frame, frame_len);
-            }
+            // alone - no fan-out, no receipt. The two share this arm because
+            // the bridge's part is the same routing either way; what the device
+            // does with it - wait in its bootloader, or restart its firmware -
+            // is the device's business, on its own side of the wire.
+            //
+            // Consumed **only when that port exists and was forwarded to**. An
+            // index naming no port of ours means the sender is not addressing a
+            // device behind one of them: a device that is itself a mux build
+            // (BRIDGE is `default y if MUX_SERIAL`, so this is the common case)
+            // has no ports at all, and the host that reached it through some
+            // *other* bridge means *this* device. Falling through lets
+            // `mux_admin_unit` apply the command to this device; swallowing it
+            // here is what made a directly addressed board never restart.
+            if (kxid.args_len < 2)
+                return 0;
+            uint_fast8_t index = kxid.args[1];
+            if (index >= BRIDGE_MAX_PORTS || !bridge_ports[index].in_use)
+                return 0;
+            bridge_forward_to_port(index, arb, frame, frame_len);
             return 1;
         }
         if (kxid.args[0] == MUX_CMD_RESET_PORT) {
