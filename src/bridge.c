@@ -90,8 +90,19 @@ struct bridge_port {
     // The node id of the device on a legacy port: a raw frame it sends is
     // forwarded upstream under this id's reply header. 0 until assigned.
     uint32_t node_id;
+    // Flashing tunnel mode (SET_PORT_TUNNEL, mux.h): while set, a unit routed
+    // down to this port is stripped of its header - the raw bytes go out as
+    // they are (a bootloader's katapult stream) - and the bytes read from the
+    // port are reassembled into whole tunnel units (the MUX_TUNNEL_* contract,
+    // mux.h) sent up under this port's reply id. Toggled by the host, clear at
+    // registration; per port, so a neighbouring port's traffic is untouched.
+    uint8_t tunnel;
     int in_use;
-    uint8_t in[2 * (MUX_HEADER_BYTES + MESSAGE_MAX)];
+    // The bytes read from the port that do not form a whole unit or frame yet.
+    // Capped at two maximum-size tunnel blocks (256): a whole tunnel block is
+    // at most MUX_TUNNEL_FRAME_MAX (128) bytes and always fits, and the cap is
+    // the bound the tunnel read side flushes fragments at.
+    uint8_t in[2 * MUX_TUNNEL_FRAME_MAX];
     size_t in_len;
 };
 
@@ -215,6 +226,23 @@ bridge_set_port_nodeid(const uint8_t *args, uint_fast8_t args_len)
     bridge_map_id(nodeid, index);
 }
 
+// A port-level SET_PORT_TUNNEL: the host toggling a port's flashing tunnel
+// mode ([0x06][index], mux.h). Like SET_PORT_NODEID this is the bridge's own
+// port state - consumed here, never forwarded downstream, no receipt - but it
+// flips a single bit rather than building a route: the same command both
+// enters and leaves the mode, so a repeat toggles back. Anything that names no
+// port the bridge has is dropped in silence; the payload must carry the index.
+static void
+bridge_set_port_tunnel(const uint8_t *args, uint_fast8_t args_len)
+{
+    if (args_len < MUX_SET_PORT_TUNNEL_LEN)
+        return;
+    uint_fast8_t index = args[1];
+    if (index >= BRIDGE_MAX_PORTS || !bridge_ports[index].in_use)
+        return;
+    bridge_ports[index].tunnel = !bridge_ports[index].tunnel;
+}
+
 
 /****************************************************************
  * Writing to a port
@@ -243,10 +271,12 @@ bridge_forward_to_port(int index, uint32_t arb, const uint8_t *frame
                        , uint_fast8_t frame_len)
 {
     struct bridge_port *p = &bridge_ports[index];
-    if (!(p->flags & MUX_PORT_UNITS)) {
+    if (p->tunnel || !(p->flags & MUX_PORT_UNITS)) {
         // A legacy device predates the mux: its frame goes out without the
         // header, and its parser will reject the pseudo-frame's 0x20 sequence
-        // byte - which is exactly right. A device with no admin channel
+        // byte - which is exactly right. A tunnel-mode port is the same wire
+        // rule for a different reason: its bytes are a bootloader's raw
+        // katapult stream, and mux framing has no meaning on it either. A device with no admin channel
         // executes neither of the device commands (REQUEST_BOOTLOADER,
         // RESTART_DEVICE), so this can only ever take effect on a port whose
         // device speaks units; a port with no such device is reset at the line
