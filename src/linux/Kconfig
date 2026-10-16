@@ -33,6 +33,31 @@ config BOARD_DIRECTORY
     string
     default "linux"
 
+config LINUX_BRIDGE_SERIAL
+    bool "Bridge mode: serve one tty as a downstream port"
+    default n
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        A linux process's console is one byte stream (linux/console.c), and a
+        bridge build hands it more than one port. With this, the process also
+        serves a downstream port of its own: a UART object the host creates
+        with config_uart opens the tty the launcher named for it in the
+        environment (KLIPPER_BRIDGE_PORT_0), at the rate that same command
+        carried, and the router (src/bridge.c) writes and reads that port.
+
+        Nothing is opened at init - which tty a port is on is a configuration
+        fact - so a port with no tty named, or one that cannot be opened, fails
+        that configuration explicitly instead of leaving a bridge that comes up
+        without its port. One port is served (slot 0), and a port's RESET_PORT
+        has no line to pulse on a tty, so it is dropped in silence.
+
+        This is also a mux build (MUX_SERIAL): the port-level commands and the
+        tunnel a flashing host opens travel the console's mux admin channel,
+        and the routing bridge comes with the mux half (src/Kconfig's BRIDGE
+        `default y if`). On by itself, the process is a mux device with no
+        ports - its own klipper instance and nothing else.
+
 config SERIAL
     default y
 
