@@ -8,7 +8,10 @@
 // src/uart.c), puts it in the raw mode the protocol needs, registers it as a
 // downstream port, and polls it from the task loop (bridge_poll_task) so its
 // bytes reach the router next to the process's other work instead of blocking a
-// thread on it, the way src/host/bridge.c polls its own ttys.
+// thread on it, the way src/host/bridge.c polls its own ttys. The task loop
+// sleeps when no task asks for another pass, so a timer of this port's own
+// wakes it (bridge_poll_timer, one millisecond) - the same cadence the host
+// library's bridge_poll gets from the sleep in its irq_wait.
 //
 // Which tty the port is on is the launcher's to say at run time, in the
 // environment (KLIPPER_BRIDGE_PORT_0): the host that declares the port and the
@@ -43,17 +46,17 @@
 #include <asm/termbits.h> // struct termios2, TCGETS2/TCSETS2, BOTHER
 #include <errno.h> // errno
 #include <fcntl.h> // open, O_RDWR, O_NOCTTY, O_NONBLOCK, O_CLOEXEC
-#include <poll.h> // poll, struct pollfd
 #include <stdio.h> // fprintf, stderr
 #include <stdlib.h> // getenv
 #include <string.h> // memcpy, memmove, strerror
 #include <sys/ioctl.h> // ioctl
 #include <unistd.h> // close, read, write
 #include "autoconf.h" // CONFIG_BRIDGE
+#include "board/misc.h" // timer_from_us, timer_read_time
 #include "bridge.h" // bridge_add_port, bridge_port_input
 #include "command.h" // MESSAGE_MAX
 #include "mux.h" // MUX_HEADER_BYTES
-#include "sched.h" // DECL_TASK, sched_wake_tasks
+#include "sched.h" // DECL_TASK, sched_add_timer, sched_check_wake
 #include "uart.h" // uart_backend_*
 
 // The tty this process serves as its bridge port, read from the environment
@@ -61,12 +64,16 @@
 // uart_backend_open): the launcher that starts this process sets it.
 #define LINUX_BRIDGE_PORT_ENV "KLIPPER_BRIDGE_PORT_0"
 
-// How long the port is waited on in each pass of the task loop, in
-// milliseconds. The tty is non-blocking, so this is what keeps the port polled
-// at all: the loop sleeps until a task asks for another pass, and a millisecond
-// here is the cadence the host library's bridge_poll gets from the sleep in its
-// irq_wait (IRQ_WAIT_MSECS, src/host/timer.c).
-#define LINUX_BRIDGE_POLL_MS 1
+// How often the port is polled once it is open, in microseconds.
+//
+// The task loop sleeps when no task asks for another pass - that is how a
+// linux process idles - so the port needs something to wake it: this timer
+// does, and its callback asks for the task (bridge_poll_timer_event). A
+// millisecond is the cadence the host library's bridge_poll gets from the
+// sleep its irq_wait does on every pass (IRQ_WAIT_MSECS, src/host/timer.c),
+// and it is short enough that a device behind the port never waits on a stale
+// read.
+#define LINUX_BRIDGE_POLL_US 1000
 
 // The one stream this backend serves. Static zero init gives it no owner and no
 // fd, and 'owner' is what marks it open: it and 'fd' are written together, only
@@ -83,6 +90,26 @@ struct bridge_stream {
     size_t tx_len;
 };
 static struct bridge_stream bridge_stream;
+
+// The timer that keeps the port polled, and the wake it gives bridge_poll_task:
+// a linux process's task loop sleeps in irq_wait when no task asks for another
+// pass, and this is what asks - a port whose device answers between two console
+// bytes would otherwise be read whenever the console or a timer next woke the
+// loop. The callback arms itself for the next pass, so the port is polled for
+// as long as the process lives once a port exists to poll.
+static struct task_wake bridge_wake;
+
+static uint_fast8_t
+bridge_poll_timer_event(struct timer *t)
+{
+    sched_wake_task(&bridge_wake);
+    t->waketime = timer_read_time() + timer_from_us(LINUX_BRIDGE_POLL_US);
+    return SF_RESCHEDULE;
+}
+
+static struct timer bridge_poll_timer = {
+    .func = bridge_poll_timer_event,
+};
 
 // Report 'errno' in a message written to stderr, naming the call that failed,
 // and answer -1 so callers can 'return bridge_errno("...")' directly.
@@ -177,6 +204,14 @@ uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
     s->owner = u;
     s->port = -1;
     s->tx_len = 0;
+    // The port is read and its output flushed from the task loop, which sleeps
+    // when no task asks for another pass, so the poll's own timer starts here -
+    // the point where there is a port to poll. The loop's scheduler owns the
+    // timer from now on: the callback re-arms it for as long as the process
+    // lives, which is what a port it serves is for.
+    bridge_poll_timer.waketime =
+        timer_read_time() + timer_from_us(LINUX_BRIDGE_POLL_US);
+    sched_add_timer(&bridge_poll_timer);
     fprintf(stderr, "linux bridge serial: %s open at %u baud (fd %d, slot %d)\n"
             , path, (unsigned int)baud, fd, slot);
     return UART_OPEN_OK;
@@ -270,10 +305,11 @@ uart_backend_set_port(struct uart_s *u, int index)
 // whatever the device sent and hand it to the router.
 //
 // This runs from the task loop, not from an ISR: the bytes are scanned and
-// forwarded (bridge_port_input), which touches buffers the loop owns. The tty
-// is non-blocking, so the wait below is what keeps the port coming up again at
-// all - the loop sleeps until a task asks for another pass - and reading until
-// the port is empty keeps a burst from waiting on the next pass.
+// forwarded (bridge_port_input), which touches buffers the loop owns. Nothing
+// here waits - the tty is non-blocking, and bridge_poll_timer is what brings
+// the task back every millisecond - so a pass costs the loop only what the port
+// has to say. Reading until the port is empty keeps a burst from waiting on the
+// next pass.
 void
 bridge_poll_task(void)
 {
@@ -282,11 +318,11 @@ bridge_poll_task(void)
     // not taken yet has no one to feed its bytes to.
     if (!s->owner || s->port < 0)
         return;
+    // The timer is the only waker, and clearing its flag is what keeps one
+    // wake from being served twice.
+    if (!sched_check_wake(&bridge_wake))
+        return;
     bridge_flush(s);
-    // A signal (SIGALRM, the loop's timers) ends this early; the return value
-    // says nothing the read below does not see anyway.
-    struct pollfd pfd = { .fd = s->fd, .events = POLLIN };
-    poll(&pfd, 1, LINUX_BRIDGE_POLL_MS);
     uint8_t buf[256];
     for (;;) {
         ssize_t n = read(s->fd, buf, sizeof(buf));
@@ -298,10 +334,6 @@ bridge_poll_task(void)
             continue;
         break;               // EAGAIN, or the port is gone
     }
-    // The port is why this task runs at all: without a requested pass the loop
-    // sleeps until the console next speaks or a timer fires, and a device
-    // behind the port would wait that long for its bytes to be read.
-    sched_wake_tasks();
 }
 DECL_TASK(bridge_poll_task);
 #endif // CONFIG_BRIDGE
