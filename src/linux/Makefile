@@ -18,6 +18,10 @@ ifeq ($(CONFIG_CANSERIAL),y)
 CFLAGS += -Ilib/fast-hash
 endif
 
+# The bridge's byte-stream UART backend (linux/bridge.c): the tty a UART object
+# the host configured opens, handed to the router as a downstream port.
+src-$(CONFIG_LINUX_BRIDGE_SERIAL) += linux/bridge.c
+
 CFLAGS_klipper.elf += -lutil -lrt -lpthread
 
 flash: $(OUT)klipper.elf
