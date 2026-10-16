@@ -481,21 +481,20 @@ mux_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
     return MUX_UNIT_CONSUMED;
 }
 
-// The tunnel unit: one katapult message block carried whole inside one unit.
-//
-// This mirrors host `serial.rs` ("The tunnel unit") byte for byte - the tag,
-// the word-count position and the length rule are the shared contract;
-// change one, change both. The tag sits at the frame position (the bytes
-// after the header) and can never collide with a klipper frame: a klipper
-// frame's first byte is its length (MESSAGE_MIN..MESSAGE_MAX) and neither
-// 0x01 nor 0x88 is in that range. The unit layer checks only the frame's
-// shape - never the inner CRC and never the command byte; those belong to
-// the consumer of the block, not to the tunnel.
-#define MUX_TUNNEL_TAG0 0x01             // katapult MESSAGE_STX1 / MESSAGE_STX2
-#define MUX_TUNNEL_TAG1 0x88
-#define MUX_TUNNEL_POS_WORDCNT 3         // katapult MESSAGE_POS_LEN (after cmd)
-#define MUX_TUNNEL_FRAME_MIN 8           // katapult MESSAGE_MIN / MESSAGE_MAX
-#define MUX_TUNNEL_FRAME_MAX 128
+// The tunnel unit contract (the MUX_TUNNEL_* defines and the length rule) lives
+// in mux.h with the rest of the shared wire format; the bridge's port read side
+// (bridge.c, tunnel mode) uses the same definitions to reassemble blocks.
+
+// One tunnel frame's length for its word count, or 0 when the count is past the
+// limit - katapult's own rule, and the one host serial.rs mirrors.
+size_t
+mux_tunnel_frame_len(uint8_t word_cnt)
+{
+    size_t frame_len = (size_t)word_cnt * 4 + MUX_TUNNEL_FRAME_MIN;
+    if (frame_len > MUX_TUNNEL_FRAME_MAX)
+        return 0;
+    return frame_len;
+}
 
 // The unit at the front of the buffer, or 0 when it has not arrived whole.
 static size_t
@@ -522,10 +521,9 @@ mux_unit_len(uint8_t *buf, size_t len, uint32_t *arb, uint_fast8_t *consumed)
             return *consumed;         // 0x01 is no klipper length either: junk
         if (len < (size_t)*consumed + MUX_TUNNEL_POS_WORDCNT + 1)
             return 0;                 // the word count is still coming
-        size_t frame_len = (size_t)buf[*consumed + MUX_TUNNEL_POS_WORDCNT] * 4
-                           + MUX_TUNNEL_FRAME_MIN;
-        if (frame_len < MUX_TUNNEL_FRAME_MIN
-            || frame_len > MUX_TUNNEL_FRAME_MAX)
+        size_t frame_len = mux_tunnel_frame_len(
+            buf[*consumed + MUX_TUNNEL_POS_WORDCNT]);
+        if (!frame_len)
             return *consumed;         // a word count past 128: junk
         if (len < (size_t)*consumed + frame_len)
             return 0;                 // the frame is still arriving
