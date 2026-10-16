@@ -498,6 +498,37 @@ choice
         depends on HAVE_STM32_USBCANBUS
         select USBCANBUS
 endchoice
+
+######################################################################
+# Bridge ports
+######################################################################
+
+# Hand a hardware USART to the bridge as a downstream port: the host opens it
+# with config_uart and attaches it with config_bridge_port, and whatever is
+# wired to it is then reachable through the port-level commands and the
+# flashing tunnel. The console keeps its own carrier - a USART has one register
+# block and one interrupt vector, so this is never the console USART1, and the
+# option below excludes those choices. The other families (F0/G0/G4/H7) have a
+# different USART register block and would need a backend of their own, the way
+# the console has stm32f0_serial.c.
+config STM32_BRIDGE_SERIAL_USART1
+    bool "Bridge port on USART1 (PA10/PA9)"
+    depends on MACH_STM32F1 || MACH_STM32F2 || MACH_STM32F4 || MACH_STM32F7 || MACH_STM32L4
+    depends on !STM32_SERIAL_USART1 && !STM32_SERIAL_USART1_ALT_PB7_PB6
+    depends on !STM32_USB_PA11_PA12_REMAP && !STM32_CANBUS_PA11_PA12_REMAP
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        Give the bridge one downstream port on a hardware USART: USART1, with
+        PA10 as RX and PA9 as TX. The host creates the port's UART object with
+        config_uart - carrying the line rate it wants, not a build-time
+        constant - and attaches it with config_bridge_port.
+
+        The bridge carries one such port, and it is the first port the host
+        declares. The port has no modem lines, so the port-level RESET_PORT is
+        dropped in silence: a device without an admin channel of its own has no
+        line-level reset on this bridge.
+
 choice
     prompt "CAN bus interface" if USBCANBUS
     config STM32_CMENU_CANBUS_PB8_PB9
