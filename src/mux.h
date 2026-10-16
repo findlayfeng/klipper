@@ -67,6 +67,10 @@ int mux_is_reply_arb(uint32_t arb);
 //                                               same routing as 0x02, but the
 //                                               device comes back up instead of
 //                                               waiting in a bootloader
+//   0x06 SET_PORT_TUNNEL    [index]             the bridge toggles port
+//                                               `index` into (or out of)
+//                                               flashing tunnel mode; stays on
+//                                               the bridge, never forwarded
 //
 // and one response:
 //
@@ -74,10 +78,10 @@ int mux_is_reply_arb(uint32_t arb);
 //                                               to a scan
 //
 // 0x02 and 0x05 name a device (routed by the bridge the same way, executed by
-// the device); 0x03 and 0x04 name the bridge itself and never travel
-// downstream. The four (0x02, 0x03, 0x04, 0x05) are addressed by the port index
-// the identify dictionary reports; a payload that is short or names no such
-// port is dropped in silence, and none of these carries a receipt.
+// the device); 0x03, 0x04 and 0x06 name the bridge itself and never travel
+// downstream. The five (0x02, 0x03, 0x04, 0x05, 0x06) are addressed by the port
+// index the identify dictionary reports; a payload that is short or names no
+// such port is dropped in silence, and none of these carries a receipt.
 //
 // The two device commands are the two resets a device can be asked for, and
 // they differ in where it ends up: MUX_CMD_REQUEST_BOOTLOADER is CAN's
@@ -90,6 +94,7 @@ int mux_is_reply_arb(uint32_t arb);
 #define MUX_CMD_SET_PORT_NODEID 0x03
 #define MUX_CMD_RESET_PORT 0x04
 #define MUX_CMD_RESTART_DEVICE 0x05
+#define MUX_CMD_SET_PORT_TUNNEL 0x06
 
 // SET_PORT_NODEID's payload is four bytes: [0x03][index][id][flags]. `index` is
 // a 0-based port index (a port the port table does not list is dropped), `id`
@@ -99,6 +104,16 @@ int mux_is_reply_arb(uint32_t arb);
 // bridge's own tables and nothing else: no receipt, no copy downstream, and a
 // repeat simply writes the same values again.
 #define MUX_SET_PORT_NODEID_LEN 4
+
+// SET_PORT_TUNNEL's payload is two bytes: [0x06][index]. The command toggles
+// port `index`'s flashing tunnel mode (bridge.c): the same command both enters
+// and leaves it, so a repeat simply flips back. In tunnel mode the port's
+// downstream units lose their headers (the raw katapult blocks go down whole)
+// and the bytes coming up are reassembled into tunnel units under the port's
+// reply id. Like SET_PORT_NODEID it is the bridge's own port state: consumed by
+// the bridge, never forwarded, no receipt; a port the table does not list is
+// dropped in silence.
+#define MUX_SET_PORT_TUNNEL_LEN 2
 
 // A port's flags, from SET_PORT_NODEID: whether the device on it speaks the
 // unit format. Set, the port forwards units both ways unchanged; clear, it
@@ -113,6 +128,24 @@ int mux_is_reply_arb(uint32_t arb);
 
 // The two bytes a unit's header occupies.
 #define MUX_HEADER_BYTES 2
+
+// The tunnel unit's frame: one katapult message block carried whole inside one
+// mux unit - the byte-for-byte contract host `serial.rs` ("The tunnel unit")
+// states and this side mirrors. The tag sits at the frame position (the bytes
+// after the header) and can never collide with a klipper frame: a klipper
+// frame's first byte is its length (MESSAGE_MIN..MESSAGE_MAX) and neither
+// 0x01 nor 0x88 is in that range. The unit layer checks only the frame's shape
+// - never the inner CRC and never the command byte; those belong to the
+// consumer of the block, not to the tunnel.
+#define MUX_TUNNEL_TAG0 0x01             // katapult MESSAGE_STX1 / MESSAGE_STX2
+#define MUX_TUNNEL_TAG1 0x88
+#define MUX_TUNNEL_POS_WORDCNT 3         // katapult MESSAGE_POS_LEN (after cmd)
+#define MUX_TUNNEL_FRAME_MIN 8           // katapult MESSAGE_MIN / MESSAGE_MAX
+#define MUX_TUNNEL_FRAME_MAX 128
+
+// One tunnel frame's length for its word count - katapult's own rule - or 0
+// when the count is past the limit (31 would make 132 bytes).
+size_t mux_tunnel_frame_len(uint8_t word_cnt);
 
 // The band of legal codewords that name no address: a reader drops a unit whose
 // header decodes into it, which is also where an extended header would start.
