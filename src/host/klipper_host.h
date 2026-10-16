@@ -194,7 +194,9 @@ size_t klipper_host_output_unit(uint8_t *buf, size_t buf_size,
 
 /**
  * Run the klipper main scheduling loop (blocking).
- * This function blocks until klipper_host_shutdown() is called.
+ * This function blocks until klipper_host_shutdown() is called: that call wakes
+ * the loop through the library's own wake fd (one per loaded instance, no
+ * process-wide signal), and the loop then returns.
  * Internal shutdowns (e.g. emergency_stop) keep the loop running
  * and can be recovered with a config_reset command.
  * Should be called from a dedicated thread or the main thread.
@@ -210,7 +212,9 @@ void klipper_host_step(void);
 
 /**
  * Request klipper to shut down.
- * Wakes up klipper_host_run() so it can return.
+ * Wakes up klipper_host_run() so it can return, and releases a caller blocked in
+ * klipper_host_output_wait(). Nothing in it reaches outside the library instance
+ * whose loop it is (no signal to the process).
  * Thread-safe: can be called from any thread.
  */
 void klipper_host_shutdown(void);
