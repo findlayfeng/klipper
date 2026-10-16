@@ -9,20 +9,22 @@
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
 #define _GNU_SOURCE
+#include <poll.h> // poll
 #include <time.h> // clock_gettime, struct timespec
-#include <signal.h> // sigaction, sigemptyset, alarm
-#include <string.h> // memset
-#include <unistd.h> // alarm
-#include <poll.h> // ppoll
 #include "autoconf.h" // CONFIG_CLOCK_FREQ
 #include "board/irq.h" // irq_disable, irq_save, irq_poll
 #include "board/misc.h" // timer_read_time, timer_kick
 #include "board/timer_irq.h" // timer_dispatch_many
 #include "sched.h" // DECL_INIT
-#include "internal.h" // bridge_poll
+#include "internal.h" // klipper_host_wake_fd, klipper_host_check_shutdown,
+                       // bridge_poll
 
 #define NSECS 1000000000ULL
 #define NSECS_PER_TICK (NSECS / CONFIG_CLOCK_FREQ)
+
+// How long irq_wait() sleeps at most when nothing is due: it polls the clock
+// this often, and the wake fd of klipper_host_shutdown() cuts the sleep short.
+#define IRQ_WAIT_MSECS 1
 
 // Global timer state
 static struct {
@@ -30,7 +32,6 @@ static struct {
     uint32_t base_counter;        // Counter value at reference time
     uint32_t next_wake_counter;   // Next scheduled wake time
     volatile uint8_t need_timer_dispatch; // Set when timers must run
-    sigset_t ss_timer;            // Timer signal set
 } TimerState;
 
 // Convert a timespec (relative to base_ts) to a counter value
@@ -55,14 +56,6 @@ counter_to_timespec(uint32_t counter, struct timespec *ts)
         ts->tv_sec--;
         ts->tv_nsec += 1000000000LL;
     }
-}
-
-// SIGALRM handler - wakes up irq_wait()
-static void
-timer_signal_handler(int sig)
-{
-    (void)sig;
-    TimerState.need_timer_dispatch = 1;
 }
 
 // Return the current time (in absolute clock ticks)
@@ -90,16 +83,6 @@ timer_init(void)
     TimerState.base_counter = 0;
     TimerState.next_wake_counter = timer_read_time();
     TimerState.need_timer_dispatch = 1;
-
-    // Set up SIGALRM handler
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = timer_signal_handler;
-    sa.sa_flags = SA_RESTART;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGALRM, &sa, NULL);
-    sigemptyset(&TimerState.ss_timer);
-    sigaddset(&TimerState.ss_timer, SIGALRM);
 
     timer_kick();
 }
@@ -141,11 +124,12 @@ void
 irq_wait(void)
 {
     if (!TimerState.need_timer_dispatch) {
-        // Sleep briefly, waking on SIGALRM or timeout
-        struct timespec ts;
-        ts.tv_sec = 0;
-        ts.tv_nsec = 1000 * 1000; // 1ms poll interval
-        ppoll(NULL, 0, &ts, &TimerState.ss_timer);
+        // Sleep briefly, waking on the clock's tick, or immediately when the
+        // library's wake fd is written (klipper_host_shutdown()). The fd is not
+        // read: a write only means the loop is on its way out, which the
+        // irq_poll() below acts on.
+        struct pollfd wake = {.fd = klipper_host_wake_fd(), .events = POLLIN};
+        poll(&wake, 1, IRQ_WAIT_MSECS);
     }
     irq_poll();
 #if CONFIG_BRIDGE && CONFIG_BRIDGE_PORT_SERIAL
@@ -159,6 +143,10 @@ irq_wait(void)
 void
 irq_poll(void)
 {
+    // The task loop passes here once per iteration, whether that iteration slept
+    // in irq_wait() or found the tasks busy - which is why an external shutdown
+    // is noticed and unwound here, and not only on the way out of the sleep.
+    klipper_host_check_shutdown();
     if (TimerState.need_timer_dispatch) {
         TimerState.need_timer_dispatch = 0;
         TimerState.next_wake_counter = timer_dispatch_many();

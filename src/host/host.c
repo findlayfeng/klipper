@@ -2,8 +2,12 @@
 //
 // The library runs klipper's scheduler via sched_main(). Since
 // sched_main() loops forever, an external shutdown request is
-// delivered with SIGUSR1, whose handler longjmps back into
-// klipper_host_run() so it can return to the caller.
+// delivered through the library's own wake fd (g_wake_fd):
+// klipper_host_shutdown() sets g_shutdown_requested and writes that
+// fd, the task loop's sleep (irq_wait, timer.c) wakes on it, and the
+// loop then longjmps back into klipper_host_run() so it can return to
+// the caller. The fd is per loaded instance, so no process-wide
+// state - a signal disposition, say - takes part in it.
 //
 // Internal shutdowns (e.g. emergency_stop commands) are handled by
 // sched_main() itself and keep the library alive (config_reset /
@@ -14,11 +18,12 @@
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
 #define _GNU_SOURCE
+#include <errno.h> // errno
 #include <setjmp.h> // setjmp, longjmp
-#include <signal.h> // sigaction, SIGUSR1
-#include <pthread.h> // pthread_t, pthread_self, pthread_kill
 #include <stdio.h> // fprintf
-#include <string.h> // memset, memcpy
+#include <string.h> // strerror
+#include <sys/eventfd.h> // eventfd, EFD_CLOEXEC, EFD_NONBLOCK
+#include <unistd.h> // write
 #include "autoconf.h" // CONFIG_MUX_SERIAL
 #include "basecmd.h" // stats_update
 #include "board/irq.h" // irq_poll
@@ -29,11 +34,14 @@
 #include "klipper_host.h"
 
 // Global state
-static volatile sig_atomic_t g_shutdown_requested;
-static pthread_t g_klipper_thread;
+static volatile int g_shutdown_requested;
 static volatile int g_klipper_thread_active;
 static jmp_buf g_main_jmp;
 static int g_initialised;
+// The fd the task loop sleeps on and klipper_host_shutdown() writes to end that
+// sleep: one eventfd per loaded instance, so that ending the loop needs no
+// process-wide state. -1 until klipper_host_init().
+static int g_wake_fd = -1;
 
 // The tty the host named for each bridge port, one slot per port index, before
 // klipper came up (klipper_host_port). A bit in g_port_named says whether its
@@ -45,13 +53,25 @@ static unsigned int g_port_named;
 
 
 
-// SIGUSR1 handler - longjmp out of sched_main() on external shutdown
-static void
-sigusr1_handler(int sig)
+// End the task loop started by klipper_host_run() when the host asked for a
+// shutdown, i.e. leave through the longjmp that returns to klipper_host_run().
+// Called from the task loop's interrupt emulation (timer.c), always on the
+// thread running that loop. A request that arrives while no loop is running owes
+// no unwinding - the loop's own start check acts on it instead.
+void
+klipper_host_check_shutdown(void)
 {
-    (void)sig;
-    if (g_shutdown_requested)
+    if (g_shutdown_requested && g_klipper_thread_active)
         longjmp(g_main_jmp, 1);
+}
+
+// The fd the task loop sleeps on while it has nothing to do (timer.c), and the
+// one klipper_host_shutdown() writes to end that sleep. -1 when the library was
+// never initialised: the sleep is then a plain tick.
+int
+klipper_host_wake_fd(void)
+{
+    return g_wake_fd;
 }
 
 // Set the identity this library answers the serial mux with.
@@ -110,13 +130,15 @@ klipper_host_init(void)
     g_shutdown_requested = 0;
     g_klipper_thread_active = 0;
 
-    // Install the external shutdown handler
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = sigusr1_handler;
-    sa.sa_flags = 0;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGUSR1, &sa, NULL);
+    // The fd klipper_host_shutdown() writes to end the task loop's sleep. One
+    // per loaded instance, non-blocking so a read of it that finds it empty does
+    // not sit there, and closed across exec so a host that execs something else
+    // does not hand it the fd.
+    g_wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (g_wake_fd < 0) {
+        fprintf(stderr, "klipper host: eventfd failed: %s\n", strerror(errno));
+        return -1;
+    }
 
 #if CONFIG_MUX_SERIAL
     // The identity is the host's to assign (klipper_host_set_uuid); report what
@@ -136,7 +158,7 @@ klipper_host_init(void)
 }
 
 // Request klipper to shut down (thread-safe).
-// Delivers SIGUSR1 to the thread running klipper_host_run().
+// Wakes the thread running klipper_host_run() through the library's wake fd.
 void
 klipper_host_shutdown(void)
 {
@@ -144,8 +166,14 @@ klipper_host_shutdown(void)
     // Release anyone blocked in klipper_host_output_wait(), so a host reading in
     // a loop notices the shutdown immediately instead of after its timeout.
     klipper_console_wake();
-    if (g_klipper_thread_active)
-        pthread_kill(g_klipper_thread, SIGUSR1);
+    // End the task loop's sleep. The write does not have to be checked: should it
+    // fail, the next tick of that sleep (1ms, timer.c) carries the flag into the
+    // loop anyway.
+    if (g_wake_fd >= 0) {
+        uint64_t one = 1;
+        ssize_t written = write(g_wake_fd, &one, sizeof(one));
+        (void)written;
+    }
 }
 
 // Check if klipper is in (internal) shutdown state
@@ -171,10 +199,11 @@ klipper_host_run(void)
     if (g_klipper_thread_active || g_shutdown_requested)
         return;
 
-    g_klipper_thread = pthread_self();
-    g_klipper_thread_active = 1;
-
     if (setjmp(g_main_jmp) == 0) {
+        // The loop is live from here on: timer.c's klipper_host_check_shutdown()
+        // may unwind this frame, which is what the flag marks and the reason it
+        // is set only now, with the jmp_buf in hand.
+        g_klipper_thread_active = 1;
         // Run the klipper scheduler (does not return normally)
         sched_main();
     }
