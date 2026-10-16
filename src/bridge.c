@@ -39,6 +39,12 @@
 // whose device was told it does not - is legacy, and the strip/head rule below
 // is what keeps the wire format of a device that predates the mux working.
 //
+// A port the host has put in flashing tunnel mode (SET_PORT_TUNNEL, mux.h) is
+// that same strip/head rule with no unit layer at all: what is on the line is a
+// bootloader's raw katapult stream, so a block the host wrapped in a unit goes
+// down bare and the blocks read from the line go up whole under the port's
+// reply id (mux.h MUX_TUNNEL_* is the shared contract).
+//
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
 //
 // This file may be distributed under the terms of the GNU GPLv3 license.
@@ -348,6 +354,24 @@ bridge_port_raw_up(struct bridge_port *p, uint_fast8_t frame_len)
     mux_send(unit, header + frame_len);
 }
 
+// Whole katapult blocks read from a tunnel-mode port, sent up one block to a
+// unit under the port's own reply id - the id the host named the port with
+// (SET_PORT_NODEID), the same address a legacy port's raw frames are headed
+// with. Without one there is no address to send them under, so they are
+// dropped, the rule `bridge_port_raw_up` follows too.
+static void
+bridge_port_tunnel_up(struct bridge_port *p, size_t frame_len)
+{
+    if (!p->node_id)
+        return;
+    uint8_t unit[MUX_HEADER_BYTES + MUX_TUNNEL_FRAME_MAX];
+    uint_fast8_t header = mux_encode_header(unit, mux_reply_arb_id(p->node_id));
+    if (!header)
+        return;
+    memcpy(&unit[header], p->in, frame_len);
+    mux_send(unit, header + frame_len);
+}
+
 // An admin reply unit from a downstream port: a NEED_NODEID names the uuid that
 // answered, which is what the uuid->port table is built from.
 static void
@@ -375,6 +399,51 @@ bridge_port_unit_up(struct bridge_port *p, int index, uint32_t arb
     mux_send(p->in, unit_len);
 }
 
+// A tunnel-mode port's read side: the bytes on the line are a bootloader's raw
+// katapult stream, so no unit header can be cut off it. Each whole message
+// block is found by its tag and sent up as one tunnel unit, and everything
+// before a block goes a byte at a time - the resynchronisation the frame
+// parser applies to a block it cannot read.
+static void
+bridge_port_tunnel_scan(int index)
+{
+    struct bridge_port *p = &bridge_ports[index];
+    for (;;) {
+        if (!p->in_len)
+            return;
+        if (p->in[0] != MUX_TUNNEL_TAG0) {
+            bridge_port_drop(p, 1);
+            continue;
+        }
+        if (p->in_len < 2)
+            return;                    // the second tag byte is still coming
+        if (p->in[1] != MUX_TUNNEL_TAG1) {
+            bridge_port_drop(p, 1);
+            continue;
+        }
+        if (p->in_len <= MUX_TUNNEL_POS_WORDCNT)
+            return;                    // the word count is still coming
+        size_t frame_len = mux_tunnel_frame_len(p->in[MUX_TUNNEL_POS_WORDCNT]);
+        if (!frame_len) {
+            bridge_port_drop(p, 1);    // a word count past the limit: junk
+            continue;
+        }
+        if (p->in_len < frame_len) {
+            if (p->in_len < sizeof(p->in))
+                return;                // the block is still arriving
+            // The buffer is full with the block unfinished, so it cannot
+            // complete in it: up it goes cut at the largest frame size, and the
+            // host resynchronises on the fragment (serial.rs `UnitStream`). A
+            // block always fits - `sizeof p->in` is twice MUX_TUNNEL_FRAME_MAX -
+            // so this is the bound the buffer is capped at, not a path the
+            // stream takes.
+            frame_len = MUX_TUNNEL_FRAME_MAX;
+        }
+        bridge_port_tunnel_up(p, frame_len);
+        bridge_port_drop(p, frame_len);
+    }
+}
+
 // Split whatever a port has buffered into whole units and raw frames, in
 // arrival order, and act on each. Anything that cannot begin a unit (a framing
 // bit that is not a header, a length no frame has) is dropped a byte at a time,
@@ -383,6 +452,12 @@ static void
 bridge_port_scan(int index)
 {
     struct bridge_port *p = &bridge_ports[index];
+    if (p->tunnel) {
+        // No unit framing on this line: only whole katapult blocks are cut out
+        // of the stream (bridge_port_tunnel_scan above).
+        bridge_port_tunnel_scan(index);
+        return;
+    }
     for (;;) {
         if (!p->in_len)
             return;
@@ -440,8 +515,10 @@ bridge_add_port(const struct bridge_port_ops *ops, void *ctx)
         bridge_ports[i].ops = *ops;
         bridge_ports[i].ops.ctx = ctx;
         // No flags: the port starts legacy, and the host names what is behind
-        // it with the port-level SET_PORT_NODEID.
+        // it with the port-level SET_PORT_NODEID. No tunnel either: that too is
+        // the host's to turn on (SET_PORT_TUNNEL).
         bridge_ports[i].flags = 0;
+        bridge_ports[i].tunnel = 0;
         bridge_ports[i].in_use = 1;
         return i;
     }
