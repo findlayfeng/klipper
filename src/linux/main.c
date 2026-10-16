@@ -12,8 +12,9 @@
 #include "autoconf.h" // CONFIG_MUX_SERIAL
 #include "board/misc.h" // console_sendf, mcu_restart
 #include "command.h" // DECL_CONSTANT
+#include "generic/canserial.h" // canserial_set_uuid
 #include "internal.h" // console_setup
-#if CONFIG_MUX_SERIAL
+#if CONFIG_MUX_SERIAL || CONFIG_CANSERIAL
 #include "mux.h" // mux_set_uuid, MUX_UUID_LEN
 #endif
 #include "sched.h" // sched_main
@@ -80,7 +81,10 @@ DECL_COMMAND_FLAGS(command_config_reset, HF_IN_SHUTDOWN, "config_reset");
  * Startup
  ****************************************************************/
 
-#if CONFIG_MUX_SERIAL
+#if CONFIG_CANSERIAL
+#define GETOPT_OPTS "wrI:U:c:"
+#define USAGE_FORMAT "Usage: %s [-w] [-r] [-I path] [-U uuid] [-c ifname]\n"
+#elif CONFIG_MUX_SERIAL
 #define GETOPT_OPTS "wrI:U:"
 #define USAGE_FORMAT "Usage: %s [-w] [-r] [-I path] [-U uuid]\n"
 #else
@@ -88,7 +92,7 @@ DECL_COMMAND_FLAGS(command_config_reset, HF_IN_SHUTDOWN, "config_reset");
 #define USAGE_FORMAT "Usage: %s [-w] [-r] [-I path]\n"
 #endif
 
-#if CONFIG_MUX_SERIAL
+#if CONFIG_MUX_SERIAL || CONFIG_CANSERIAL
 // One hex digit's value, or -1 when the character is not one.
 static int
 hex_digit(char c)
@@ -104,6 +108,11 @@ hex_digit(char c)
 
 // Decode the twelve hex digits a caller names with `-U` into the device's
 // six-byte uuid. No "0x" prefix, either case; -1 on anything else.
+//
+// The same flag names the identity in both carriers: the mux takes the six
+// bytes as its identity outright, while the CAN console hands them to
+// canserial_set_uuid() as the raw id its canbus uuid is derived from (there is
+// no chip id to read on this target).
 static int
 parse_uuid(const char *hex, uint8_t *uuid)
 {
@@ -116,7 +125,7 @@ parse_uuid(const char *hex, uint8_t *uuid)
     }
     return hex[MUX_UUID_LEN * 2] ? -1 : 0;
 }
-#endif // CONFIG_MUX_SERIAL
+#endif // CONFIG_MUX_SERIAL || CONFIG_CANSERIAL
 
 int
 main(int argc, char **argv)
@@ -125,7 +134,10 @@ main(int argc, char **argv)
     orig_argv = argv;
     int opt, watchdog = 0, realtime = 0;
     char *serial = "/tmp/klipper_host_mcu";
-#if CONFIG_MUX_SERIAL
+#if CONFIG_CANSERIAL
+    char *can_ifname = "can0";
+#endif
+#if CONFIG_MUX_SERIAL || CONFIG_CANSERIAL
     uint8_t uuid[MUX_UUID_LEN];
     int have_uuid = 0;
 #endif
@@ -140,13 +152,18 @@ main(int argc, char **argv)
         case 'I':
             serial = optarg;
             break;
-#if CONFIG_MUX_SERIAL
+#if CONFIG_MUX_SERIAL || CONFIG_CANSERIAL
         case 'U':
             if (parse_uuid(optarg, uuid)) {
                 fprintf(stderr, USAGE_FORMAT, argv[0]);
                 return -1;
             }
             have_uuid = 1;
+            break;
+#endif
+#if CONFIG_CANSERIAL
+        case 'c':
+            can_ifname = optarg;
             break;
 #endif
         default:
@@ -168,9 +185,26 @@ main(int argc, char **argv)
     if (have_uuid)
         mux_set_uuid(uuid);
 #endif
+#if CONFIG_CANSERIAL
+    // The same reasoning, and here `-U` is not optional: a CAN node with an all
+    // zero uuid cannot be told apart from any other unnamed node, so a run that
+    // does not name one is refused rather than answered for.
+    if (!have_uuid) {
+        fprintf(stderr, "CAN serial needs a device uuid: -U <12 hex digits>\n");
+        return -1;
+    }
+    canserial_set_uuid(uuid, MUX_UUID_LEN);
+#endif
     int ret = console_setup(serial);
     if (ret)
         return -1;
+#if CONFIG_CANSERIAL
+    // The pty above is only this build's "firmware is up" marker; the protocol
+    // runs over the CAN socket.
+    ret = can_console_setup(can_ifname);
+    if (ret)
+        return -1;
+#endif
     if (watchdog) {
         int ret = watchdog_setup();
         if (ret)

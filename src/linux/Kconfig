@@ -12,6 +12,23 @@ config LINUX_SELECT
     select HAVE_GPIO_I2C
     select HAVE_GPIO_HARD_PWM
 
+config LINUX_CANSERIAL
+    bool "CAN bus (on a SocketCAN interface)"
+    select CANSERIAL
+    help
+        Speak can-serial over a CAN interface the kernel already provides
+        (linux/can.c), rather than over this process's own console. The
+        interface is named on the command line (`-c`, default can0) and has to
+        exist; its bit timing is the interface's own, set with `ip link` - a
+        vcan interface has none.
+
+        SERIAL stays on beside this: a linux process's console is
+        linux/console.c, not the serial backend that symbol selects on other
+        arches (generic/serial_irq.c is not built here), so there is no choice
+        between the two carriers to make. The pty this target always opens
+        stays as well, as the marker its `-I` path points at: with a CAN
+        console the protocol runs over the socket, not the pty.
+
 config BOARD_DIRECTORY
     string
     default "linux"

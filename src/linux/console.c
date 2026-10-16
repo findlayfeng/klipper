@@ -22,8 +22,12 @@
 #include "mux.h" // mux_input, mux_out_header, mux_send
 #include "sched.h" // sched_wake_task
 
-static struct pollfd main_pfd[1];
+// Fd 0 is the pty this file opens: the protocol console, or in a CAN build the
+// marker of it. Fd 1 is a console's other source of input - the CAN socket
+// (linux/can.c) - and stays -1 when there is none, an fd ppoll ignores.
+static struct pollfd main_pfd[2] = { {.fd = -1}, {.fd = -1} };
 #define MP_TTY_IDX   0
+#define MP_EXT_IDX   1
 
 // Report 'errno' in a message written to stderr
 void
@@ -65,6 +69,14 @@ set_close_on_exec(int fd)
     return 0;
 }
 
+// Open the pseudo-tty named by the `-I` path and link that path to it.
+//
+// Without a CAN console the protocol runs over this pty. With one
+// (CONFIG_CANSERIAL) the protocol moves to the CAN socket and this pty stays as
+// the "firmware is up" marker a launcher watches: the `-I` path is a symlink to
+// the tty, and a launcher waiting for that symlink sees the same thing in
+// either build. So the pty is opened and linked unconditionally, and only its
+// use as the protocol console is compiled out below.
 int
 console_setup(char *name)
 {
@@ -114,7 +126,17 @@ console_setup(char *name)
     return 0;
 }
 
+// Give this file a second descriptor to poll, and to wake the scheduler on: the
+// CAN console's socket (linux/can.c), which no task here owns.
+void
+console_set_extra_fd(int fd)
+{
+    main_pfd[MP_EXT_IDX].fd = fd;
+    main_pfd[MP_EXT_IDX].events = POLLIN;
+}
 
+
+#if !CONFIG_CANSERIAL
 /****************************************************************
  * Console handling
  ****************************************************************/
@@ -282,6 +304,7 @@ mux_send(const uint8_t *bytes, uint_fast8_t len)
     console_queue(bytes, len);
 }
 #endif // CONFIG_MUX_SERIAL
+#endif // !CONFIG_CANSERIAL
 
 // Sleep until a signal received (waking early for console input if needed)
 void
@@ -293,6 +316,11 @@ console_sleep(sigset_t *sigset)
             report_errno("ppoll main_pfd", ret);
         return;
     }
+#if CONFIG_CANSERIAL
+    if (main_pfd[MP_EXT_IDX].revents)
+        can_rx_notify();
+#else
     if (main_pfd[MP_TTY_IDX].revents)
         sched_wake_task(&console_wake);
+#endif
 }
