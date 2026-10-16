@@ -276,11 +276,13 @@ bridge_forward_to_port(int index, uint32_t arb, const uint8_t *frame
         // header, and its parser will reject the pseudo-frame's 0x20 sequence
         // byte - which is exactly right. A tunnel-mode port is the same wire
         // rule for a different reason: its bytes are a bootloader's raw
-        // katapult stream, and mux framing has no meaning on it either. A device with no admin channel
-        // executes neither of the device commands (REQUEST_BOOTLOADER,
-        // RESTART_DEVICE), so this can only ever take effect on a port whose
-        // device speaks units; a port with no such device is reset at the line
-        // instead (RESET_PORT, mux.h MUX_CMD_RESET_PORT).
+        // katapult stream, and mux framing has no meaning on it either.
+        //
+        // A device with no admin channel executes neither of the device
+        // commands (REQUEST_BOOTLOADER, RESTART_DEVICE), so this can only ever
+        // take effect on a port whose device speaks units; a port with no such
+        // device is reset at the line instead (RESET_PORT, mux.h
+        // MUX_CMD_RESET_PORT).
         p->ops.write(p->ops.ctx, frame, frame_len);
         return;
     }
@@ -483,6 +485,15 @@ bridge_admin_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
             bridge_set_port_nodeid(kxid.args, kxid.args_len);
             return 1;
         }
+        if (kxid.args[0] == MUX_CMD_SET_PORT_TUNNEL) {
+            // Flashing tunnel mode ([0x06][index]), the bridge's own port
+            // state like SET_PORT_NODEID: consumed here, never forwarded
+            // downstream, no receipt. Unlike the device commands there is no
+            // fall-through for an unknown index - only the bridge has a tunnel
+            // mode, so an index naming no port of ours is dropped in silence.
+            bridge_set_port_tunnel(kxid.args, kxid.args_len);
+            return 1;
+        }
         if (kxid.args[0] == MUX_CMD_REQUEST_BOOTLOADER
             || kxid.args[0] == MUX_CMD_RESTART_DEVICE) {
             // A device command aimed at one device, behind the port the host
@@ -551,9 +562,12 @@ bridge_route_unit(uint32_t arb, uint8_t *frame, uint_fast8_t frame_len)
     if (!slot)
         return;                        // no port owns this id: nothing to route
     struct bridge_port *p = &bridge_ports[slot - 1];
-    if (!(p->flags & MUX_PORT_UNITS)) {
+    if (p->tunnel || !(p->flags & MUX_PORT_UNITS)) {
         // A legacy port has the one device that predates the mux behind it: its
         // frame goes out without the header that wire format has no use for.
+        // A tunnel-mode port is the same wire rule for the flashing stream:
+        // the unit's header is mux framing, and what goes down is the raw
+        // katapult block the unit carried, byte for byte.
         p->ops.write(p->ops.ctx, frame, frame_len);
         return;
     }
