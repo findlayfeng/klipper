@@ -140,8 +140,16 @@ USARTx_IRQHandler(void)
 // Hand the bytes the interrupt received to the router. They cannot be fed from
 // the interrupt itself (bridge_port_input buffers and scans a whole unit, and
 // the router's work must not nest in an interrupt), so they wait in the ring
-// for this task. The copy out is bounded, both in size - the stack is 512 bytes
-// on this family - and in how long interrupts are held off.
+// for this task.
+//
+// The router runs with interrupts off, exactly as it does under the console's
+// own consumer (generic/serial_irq.c's console_task holds an irq_save across
+// mux_input), and at most DRAIN_CHUNK bytes are handed over per pass so the
+// section stays short. The bytes are taken straight out of the ring - the
+// interrupt only ever writes at or above rx_head, and the not-yet-advanced
+// rx_tail is what it reads as full, so it never touches the run being scanned -
+// which keeps this task's own frame small: the family's stack is 512 bytes, and
+// the router's scan already brings its buffers into whatever frame inlines it.
 #define DRAIN_CHUNK 64
 
 void
@@ -153,18 +161,21 @@ bridge_serial_task(void)
     if (port < 0)
         return;
     for (;;) {
-        uint8_t chunk[DRAIN_CHUNK];
-        size_t n = 0;
         irqstatus_t flag = irq_save();
-        uint8_t head = rx_head;
-        while (rx_tail != head && n < sizeof(chunk)) {
-            chunk[n++] = rx_buf[rx_tail];
-            rx_tail = (rx_tail + 1) & (BUF_SIZE - 1);
+        uint8_t head = rx_head, tail = rx_tail;
+        if (tail != head) {
+            // The contiguous run: up to the ring's end (the bytes past it wait
+            // for the next pass) and up to the chunk bound.
+            size_t n = head > tail ? (size_t)(head - tail)
+                                   : (size_t)(BUF_SIZE - tail);
+            if (n > DRAIN_CHUNK)
+                n = DRAIN_CHUNK;
+            bridge_port_input(port, &rx_buf[tail], n);
+            rx_tail = (tail + n) & (BUF_SIZE - 1);
         }
         irq_restore(flag);
-        if (!n)
+        if (tail == head)
             return;
-        bridge_port_input(port, chunk, n);
     }
 }
 DECL_TASK(bridge_serial_task);
