@@ -62,8 +62,8 @@
 // The receive and transmit buffers hold the largest things that can be in
 // flight back to back - a whole tunnel block (MUX_TUNNEL_FRAME_MAX, 128 bytes,
 // the bootloader stream a port can be toggled into) plus a klipper unit
-// (MUX_HEADER_BYTES + MESSAGE_MAX, 66 bytes) - with room for a burst. 256 is
-// also what the receive ring's uint8_t indices need: they wrap at the size.
+// (MUX_HEADER_BYTES + MESSAGE_MAX, 66 bytes) - with room for a burst. A power
+// of two, so the receive ring's indices can be masked into the buffer.
 #define BUF_SIZE 256
 
 // The receive ring: the interrupt appends at rx_head, the task consumes up to
@@ -96,7 +96,7 @@ static int bridge_serial_port = -1;
 static void
 bridge_serial_rx_byte(uint8_t data)
 {
-    uint8_t next = rx_head + 1;
+    uint8_t next = (rx_head + 1) & (BUF_SIZE - 1);
     if (next == rx_tail) {
         // Full: drop the newest byte rather than an older one, so what is
         // already queued stays a contiguous, in-order prefix. The byte is
@@ -159,7 +159,7 @@ bridge_serial_task(void)
         uint8_t head = rx_head;
         while (rx_tail != head && n < sizeof(chunk)) {
             chunk[n++] = rx_buf[rx_tail];
-            rx_tail++;
+            rx_tail = (rx_tail + 1) & (BUF_SIZE - 1);
         }
         irq_restore(flag);
         if (!n)
