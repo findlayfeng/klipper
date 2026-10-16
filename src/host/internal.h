@@ -12,6 +12,17 @@
 // the build's own path. Used by bridge.c when a UART object opens.
 const char *klipper_host_port_path(int slot);
 
+// host.c - the fd the task loop sleeps on while it has nothing to do, or -1
+// before klipper_host_init(), and the one klipper_host_shutdown() writes to end
+// that sleep. One fd per loaded instance. Used by timer.c's irq_wait().
+int klipper_host_wake_fd(void);
+
+// host.c - end the task loop started by klipper_host_run() when
+// klipper_host_shutdown() was called; returns when no loop is running (the
+// request is then acted on by the loop's start check, and owes no unwinding).
+// Called from the task loop's interrupt emulation in timer.c.
+void klipper_host_check_shutdown(void);
+
 // console.c - unlock console mutexes (used after longjmp unwinding)
 void klipper_console_unlock(void);
 
