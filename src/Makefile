@@ -10,6 +10,9 @@ src-$(CONFIG_BRIDGE) += bridge.c
 # UART objects: the byte streams a host creates at configuration time and hands
 # to the bridge as ports (UART, the arch's backend is SERIAL_UART).
 src-$(CONFIG_UART) += uart.c
+# The bridge's CAN downstream port (BRIDGE_PORT_CAN): one CAN controller of this
+# build handed to the bridge as a port, the way a USART is (BRIDGE_PORT_SERIAL).
+src-$(CONFIG_BRIDGE_PORT_CAN) += generic/bridge_can.c
 src-$(CONFIG_HAVE_GPIO) += initial_pins.c gpiocmds.c stepper.c endstop.c \
     trsync.c
 src-$(CONFIG_WANT_ADC) += adccmds.c

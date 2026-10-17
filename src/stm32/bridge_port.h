@@ -33,6 +33,11 @@ enum uart_open_result bridge_serial_open(struct uart_s *u, uint32_t baud,
 // The router's ops for 'u' as a downstream port.
 const struct bridge_port_ops *bridge_serial_port_ops(struct uart_s *u);
 
+// Whether 'u' is an object this backend opened. One build can carry more than one
+// kind of port, so the dispatcher (bridge_port.c) asks each backend which objects
+// are its own before answering uart.h's hooks.
+int bridge_serial_owns(const struct uart_s *u);
+
 // The bridge took 'u' as a downstream port with this index.
 void bridge_serial_set_port(struct uart_s *u, int index);
 

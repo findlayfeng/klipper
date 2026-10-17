@@ -33,7 +33,12 @@ chipid_init(void)
     if (CONFIG_USB_SERIAL_NUMBER_CHIPID)
         usb_fill_serial(&cdc_chipid.desc, ARRAY_SIZE(cdc_chipid.data)
                         , (void*)UID_BASE);
-    if (CONFIG_CANBUS)
+    // The canbus uuid is the CAN node's identity (generic/canserial.c), so it is
+    // set only in a build that has that node - CONFIG_CANBUS alone is the driver
+    // a bridge's CAN downstream port needs, with no node on it (bridge_can.c).
+    // USBCANBUS carries the node over USB (generic/usb_canbus.c), which is the
+    // other build CANSERIAL is not selected in.
+    if (CONFIG_CANSERIAL || CONFIG_USBCANBUS)
         canserial_set_uuid((void*)UID_BASE, CHIP_UID_LEN);
 #if CONFIG_MUX_SERIAL
     {

@@ -181,6 +181,11 @@ bridge_map_id(uint32_t nodeid, int port)
         // what its raw frames are headed with on the way up. (An explicit port
         // name records the id on either kind of port - bridge_set_port_nodeid.)
         bridge_ports[port].node_id = nodeid;
+    // The port's transport hears whatever the id names: a CAN port arms its
+    // receive filter here, for the ids an assignment gave a device behind it as
+    // well as for the ones the host named outright.
+    if (bridge_ports[port].ops.node_id)
+        bridge_ports[port].ops.node_id(bridge_ports[port].ops.ctx, nodeid);
 }
 
 static void

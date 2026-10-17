@@ -40,6 +40,17 @@ struct bridge_port_ops {
     // receipt, so neither value is reported onward; a backend must not block or
     // busy-wait in here - it schedules the release and returns.
     int (*reset)(void *ctx);
+    // The node id this port's device answers to, when the bridge learns or is
+    // told one: the port-level SET_PORT_NODEID, which names the device behind
+    // the port, and an assignment that turned out to be for a device on it. A
+    // transport that has to act on the id takes it here - a CAN port arms its
+    // hardware receive filter, since the ids of the devices behind it are the
+    // ids it must hear. Optional: NULL for a port whose transport needs nothing
+    // from the id (a USART port writes to its own wire and reads all of it).
+    // Called for every id the port is given, repeats included; a port that
+    // cannot take one must report it (shutdown()), never ignore it - a port that
+    // cannot hear the device it was told about is a dead port.
+    void (*node_id)(void *ctx, uint8_t node_id);
     void *ctx;
 };
 
