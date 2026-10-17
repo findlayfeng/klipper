@@ -312,7 +312,11 @@ mux_need_nodeid_via(uint8_t *buf, uint_fast8_t buf_size
                     , const uint8_t *args, uint_fast8_t args_len
                     , uint8_t port)
 {
-    uint8_t payload[1 + MUX_UUID_LEN + 1 + 1 + MUX_PATH_MAX];
+    // The answer's worst case is the uuid, an application byte, a full path and
+    // this bridge's own port appended to it - the marker and the port byte sit
+    // *after* the path, so the buffer needs two more bytes than the path bound
+    // alone suggests (the last path byte and the two appended ones).
+    uint8_t payload[1 + MUX_UUID_LEN + 1 + 1 + MUX_PATH_MAX + 2];
     if (args_len < 1 + MUX_UUID_LEN || args_len > sizeof(payload)
         || args[0] != MUX_RESP_NEED_NODEID)
         return 0;

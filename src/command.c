@@ -136,8 +136,11 @@ command_encodef(uint8_t *buf, uint_fast8_t buf_size
 {
     uint_fast8_t max_size = READP(ce->max_size);
     if (max_size <= MESSAGE_MIN)
-        // Ack/Nak message
-        return max_size;
+        // Ack/Nak message - fixed size, but the buffer still has to hold it:
+        // the caller's size is the one bound that matters here too, or the
+        // frame is written past the end (the ack is the encoder that ignores
+        // the clamp below). Nothing is written and nothing goes on the wire.
+        return buf_size < max_size ? 0 : max_size;
     if (buf_size < max_size)
         max_size = buf_size;
     uint8_t *p = &buf[MESSAGE_HEADER_SIZE];
@@ -265,8 +268,16 @@ command_lookup_parser(uint_fast16_t cmdid)
 }
 
 // Empty message (for ack/nak transmission)
+//
+// `min_size` is the frame's whole size, not 0: the console reserves room with
+// it (generic/serial_irq.c, transmit_room) when it has to compact the transmit
+// buffer, and a reservation of 0 let an ack be placed where only its mux header
+// fitted - five bytes past the end of the buffer. The message is always
+// MESSAGE_MIN bytes, so declaring that as the minimum costs nothing and is what
+// the reservation arithmetic assumes.
 const struct command_encoder encode_acknak PROGMEM = {
     .max_size = MESSAGE_MIN,
+    .min_size = MESSAGE_MIN,
 };
 
 enum { CF_NEED_SYNC=1<<0, CF_NEED_VALID=1<<1 };
