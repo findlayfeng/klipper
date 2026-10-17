@@ -632,6 +632,20 @@ bridge_can_admin_write(const uint8_t *frame, size_t frame_len)
         bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, sizeof(out));
         return 1;
     }
+    if (kxid.args[0] == MUX_CMD_REQUEST_BOOTLOADER
+        && kxid.args_len >= 2 + MUX_UUID_LEN) {
+        // [0x02][index][uuid]: the host names which board should park in its
+        // bootloader, so the command travels on the id the CAN channel spells
+        // rather than through the device's own byte stream
+        // (generic/canserial.c can_process_request_bootloader, the same opcode).
+        //
+        // Answers 0 on purpose: the unit still goes out below, which is what a
+        // mux device that *does* read units takes, and what a katapult ignores.
+        out[0] = MUX_CMD_REQUEST_BOOTLOADER;
+        memcpy(&out[1], &kxid.args[2], MUX_UUID_LEN);
+        bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, 1 + MUX_UUID_LEN);
+        return 0;
+    }
     return 0;
 }
 
