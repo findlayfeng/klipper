@@ -25,10 +25,7 @@
 //
 //   - It starts with a unit header (the port's device speaks units, so bridge.c
 //     writes header + frame): the header's own arbitration id, which is the
-//     address the host put in it - and the whole unit goes out, header and
-//     frame, because the device behind that port reads units off the bus.
-//     bridge.c is the one that decides the wire format (it strips the header
-//     for a legacy or tunnel port); this backend does not strip a second time.
+//     address the host put in it.
 //   - It has no header (the router stripped it: a legacy port's device speaks
 //     raw frames, or the port is in flashing tunnel mode and the bytes are a
 //     bootloader's katapult stream): mux_arb_id() of the node id the host named
@@ -650,9 +647,8 @@ bridge_can_admin_write(const uint8_t *frame, size_t frame_len)
     return 0;
 }
 
-// The router's write hook: one blob, sent whole and unchanged - a unit with its
-// header - on the address it names, or on the port's node id when the router
-// stripped the header off a legacy or tunnel port's blob.
+// The router's write hook: one blob, sent whole on the address it names or on the
+// port's node id when the router stripped the header.
 static int
 bridge_can_write(void *ctx, const uint8_t *data, size_t len)
 {
@@ -683,14 +679,10 @@ bridge_can_write(void *ctx, const uint8_t *data, size_t len)
             }
             return bridge_can_tx_blob(mux_arb_id(bridge_can.node_id), data, len);
         }
-        // A unit for this port's device: it goes out whole, header and frame,
-        // under the address the header named. The header is not this backend's
-        // to drop - bridge.c writes it only for a port whose device was told it
-        // speaks units (MUX_PORT_UNITS), and that device reads its input as
-        // units: generic/canserial.c runs mux_input over the stream, header and
-        // all. A stripped unit is a bare frame whose length byte is a mux
-        // length, not a frame length, so the device drops it as junk and the
-        // session never gets an identify through.
+        // A unit: its header is this port's framing, so the frame after it is
+        // what goes on the wire, under the address the header named.
+        data += consumed;
+        len -= consumed;
     } else if (bridge_can.node_id) {
         // No header - a legacy port's raw frame or a tunnel port's katapult
         // block - so the port's own node id is the address: the one its device
