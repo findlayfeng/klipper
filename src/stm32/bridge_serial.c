@@ -1,13 +1,15 @@
 // STM32 bridge port backend: hardware USARTs handed to the bridge
 //
 // A bridge build has one console - here USB CDC, or the console USART - and
-// downstream ports beside it; this file is the arch's byte stream for them: the
-// USARTs a board wires to the devices the host reaches through the bridge (the
-// port-level commands, and the flashing tunnel a katapult bootloader is driven
-// through). It fills the seam uart.h describes: uart_backend_open() brings a
+// downstream ports beside it; this file is the arch's USART backend for them:
+// the USARTs a board wires to the devices the host reaches through the bridge
+// (the port-level commands, and the flashing tunnel a katapult bootloader is
+// driven through). The arch's seam itself (uart.h) is the dispatcher's,
+// bridge_port.c, which is where a slot is resolved to a backend; this file is
+// what that dispatcher calls for the USART slots: bridge_serial_open() brings a
 // port's USART up at the rate the host asks for in config_uart,
-// uart_backend_port_ops() gives the router the hook that writes a whole blob to
-// it, and uart_backend_set_port() records the router's port index so bytes read
+// bridge_serial_port_ops() gives the router the hook that writes a whole blob to
+// it, and bridge_serial_set_port() records the router's port index so bytes read
 // back can be fed to bridge_port_input() under that port.
 //
 // Which USARTs a build offers is a build-time fact: CONFIG_STM32_BRIDGE_SERIAL
@@ -17,9 +19,10 @@
 // names it by, and the order the host lists the ports in - is its USART's place
 // among the ticked ones counted by USART number: USART1, then USART2, USART3,
 // UART4, UART5. The table below is written in that order, so a port's slot is
-// its index in it, and BRIDGE_UART_COUNT is the table's size. An unticked USART
-// simply is not there: no slot, no buffer, no interrupt, and the host cannot
-// open it.
+// its index in it, and these are the slots the dispatcher (bridge_port.c) hands
+// out first: 0..bridge_serial_slot_count()-1, ahead of any other backend's. An
+// unticked USART simply is not there: no slot, no buffer, no interrupt, and the
+// host cannot open it.
 //
 // A port is never the console's USART, and the console is never a port's: one
 // USART has one register block and one interrupt vector, so it cannot carry
@@ -53,7 +56,7 @@
 #include "internal.h" // enable_pclock, get_pclock_frequency, gpio_peripheral, GPIO
 #include "mux.h" // MUX_HEADER_BYTES, MUX_TUNNEL_FRAME_MAX
 #include "sched.h" // DECL_TASK, sched_wake_tasks
-#include "uart.h" // uart_backend_open, struct uart_s
+#include "bridge_port.h" // bridge_serial_open, bridge_serial_slot_count
 
 // 8N1, receiver and transmitter on, receive interrupt on. The transmit
 // interrupt is not here: it is turned on only while a blob is queued.
@@ -114,7 +117,7 @@ struct bridge_serial_port {
     uint8_t tx_buf[BUF_SIZE];
     volatile uint16_t tx_pos, tx_max;
 
-    // The UART object that opened the port (NULL until uart_backend_open), and
+    // The UART object that opened the port (NULL until bridge_serial_open), and
     // the router's index for it, recorded one past itself so that an untouched
     // port means "no index yet" - 0 is a real slot (the same encoding
     // bridge.c's bridge_id_port uses). The index is what received bytes are fed
@@ -216,13 +219,15 @@ static const struct bridge_serial_hw *const bridge_serial_hw[] = {
 #endif
 };
 
-// How many UART objects this board can give the bridge: one per ticked USART,
-// because each is a USART wired to a port and uart_backend_open() refuses every
+// How many UART slots this board can give the bridge: one per ticked USART,
+// because each is a USART wired to a port and bridge_serial_open() refuses every
 // slot but those. The count is the backend's fact - the same table it enforces -
-// and the host reads it back as BRIDGE_UART_COUNT to list the ports a bridge can
-// be given before it declares any (klipperx's `admin bridge config`).
-#define BRIDGE_UART_COUNT ((int)ARRAY_SIZE(bridge_serial_hw))
-DECL_CONSTANT("BRIDGE_UART_COUNT", BRIDGE_UART_COUNT);
+// and it is what the dispatcher (bridge_port.c) counts the first slots with.
+int
+bridge_serial_slot_count(void)
+{
+    return ARRAY_SIZE(bridge_serial_hw);
+}
 
 // Receive side of a port's interrupt: append the byte to that port's ring.
 #if BRIDGE_SERIAL_ANY_PORT
@@ -325,22 +330,23 @@ void
 bridge_serial_task(void)
 {
     int i;
-    for (i = 0; i < BRIDGE_UART_COUNT; i++)
+    for (i = 0; i < bridge_serial_slot_count(); i++)
         bridge_serial_drain(bridge_serial_hw[i]);
 }
 DECL_TASK(bridge_serial_task);
 
-// Open the USART behind 'slot' at 'baud'. Called once per UART object, from
-// config_uart (src/uart.c), so a slot this build does not offer, or a rate this
-// USART cannot be set to, fails the host's configuration with its own message
-// instead of leaving a port that never speaks.
+// Open the USART behind 'slot' at 'baud'. Called once per UART object, from the
+// dispatcher (bridge_port.c), which resolved the slot to this backend - so a
+// slot this build does not offer, or a rate this USART cannot be set to, fails
+// the host's configuration with its own message instead of leaving a port that
+// never speaks.
 //
 // The line rate is the one the host asked for; which USART a slot is stays a
 // build-time fact (the table above), so the slot is looked up here.
 enum uart_open_result
-uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
+bridge_serial_open(struct uart_s *u, uint32_t baud, int slot)
 {
-    if (slot < 0 || slot >= BRIDGE_UART_COUNT)
+    if (slot < 0 || slot >= bridge_serial_slot_count())
         return UART_OPEN_NO_DEVICE;
     const struct bridge_serial_hw *hw = bridge_serial_hw[slot];
     struct bridge_serial_port *port = hw->state;
@@ -383,7 +389,7 @@ static const struct bridge_serial_hw *
 bridge_serial_hw_of(void *ctx)
 {
     int i;
-    for (i = 0; i < BRIDGE_UART_COUNT; i++)
+    for (i = 0; i < bridge_serial_slot_count(); i++)
         if (bridge_serial_hw[i]->state->owner == ctx)
             return bridge_serial_hw[i];
     return NULL;
@@ -438,7 +444,7 @@ static const struct bridge_port_ops bridge_serial_ops = {
 // blob goes to is the object the router hands back as the ctx (checked against
 // the owner in the hook), so there is nothing per-object to return here.
 const struct bridge_port_ops *
-uart_backend_port_ops(struct uart_s *u)
+bridge_serial_port_ops(struct uart_s *u)
 {
     (void)u;
     return &bridge_serial_ops;
@@ -448,7 +454,7 @@ uart_backend_port_ops(struct uart_s *u)
 // bytes it reads under it. The index belongs to the port the object opened, and
 // it is recorded before the host can send anything to the port.
 void
-uart_backend_set_port(struct uart_s *u, int index)
+bridge_serial_set_port(struct uart_s *u, int index)
 {
     const struct bridge_serial_hw *hw = bridge_serial_hw_of(u);
     if (hw)
