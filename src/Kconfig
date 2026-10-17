@@ -193,6 +193,15 @@ config BRIDGE
     default y if MUX_SERIAL || MUX_CAN
 config BRIDGE_PORT_SERIAL
     bool
+# The same for CAN: one CAN controller of this build (generic/bridge_can.c) is a
+# downstream port, so the devices on that bus are reached through the bridge's
+# port commands instead of being nodes of this firmware's own CAN. It is a UART
+# object all the same - the host creates it with config_uart and attaches it with
+# config_bridge_port - so the object layer comes with it; only the rate is not a
+# UART's (CONFIG_CANBUS_FREQUENCY, not the baud the host asks for).
+config BRIDGE_PORT_CAN
+    bool
+    select UART
 
 # The byte-stream UART object layer (src/uart.c): an oid a host creates at
 # configuration time, the line rate it asked for, and the seam an arch fills.

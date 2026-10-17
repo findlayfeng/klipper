@@ -27,13 +27,12 @@
 #include "uart.h" // uart_backend_*, enum uart_open_result
 
 // The CAN backend's half of the seam (bridge_can.c, CONFIG_BRIDGE_PORT_CAN):
-// opening its slot. That file is a later unit's - there is no CAN port backend
-// in this build, so nothing here may define these, and every build today
-// compiles the block out. What the block says is the numbering contract above
-// applied to one CAN slot: the first slot left over after the UART slots is CAN
-// slot 0, and this build's CAN backend offers no other.
+// generic/bridge_can.h declares what this file calls - opening its slot, the
+// ops of the object that opened it, and the port index it feeds bytes under.
+// One CAN controller is one slot: the first slot left over after the UART slots
+// is CAN slot 0, and this build's CAN backend offers no other.
 #if CONFIG_BRIDGE_PORT_CAN
-enum uart_open_result bridge_can_open(struct uart_s *u, uint32_t baud);
+#include "generic/bridge_can.h" // bridge_can_open, bridge_can_owns
 #define BRIDGE_CAN_SLOT_COUNT 1
 #else
 #define BRIDGE_CAN_SLOT_COUNT 0
@@ -65,21 +64,32 @@ uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
 }
 
 #if CONFIG_BRIDGE
-// The router's ops for the port 'u' opened. Every port a build today can hand
-// the bridge is a UART slot (the CAN block above is compiled out), so both hooks
-// are the USART backend's; a build that adds a backend whose objects need their
-// own ops has to ask the object which backend opened it, here and below.
+// The router's ops for the port 'u' opened. A build can carry more than one kind
+// of port, so the object is asked which backend opened it (bridge_serial_owns /
+// bridge_can_owns) and gets that backend's ops - an object no backend claims
+// falls through to the USART one, the behaviour every build before the CAN port
+// had.
 const struct bridge_port_ops *
 uart_backend_port_ops(struct uart_s *u)
 {
+#if CONFIG_BRIDGE_PORT_CAN
+    if (bridge_can_owns(u))
+        return bridge_can_port_ops(u);
+#endif
     return bridge_serial_port_ops(u);
 }
 
-// The router took 'u' as the port with this index; the backend records it so the
-// bytes it reads can be fed under that port.
+// The router took 'u' as the port with this index; the backend that opened it
+// records it so the bytes it reads can be fed under that port.
 void
 uart_backend_set_port(struct uart_s *u, int index)
 {
+#if CONFIG_BRIDGE_PORT_CAN
+    if (bridge_can_owns(u)) {
+        bridge_can_set_port(u, index);
+        return;
+    }
+#endif
     bridge_serial_set_port(u, index);
 }
 #endif // CONFIG_BRIDGE

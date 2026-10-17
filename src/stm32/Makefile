@@ -89,12 +89,20 @@ src-$(CONFIG_UART) += stm32/bridge_port.c
 usb-src-$(CONFIG_HAVE_STM32_USBFS) := stm32/usbfs.c
 usb-src-$(CONFIG_HAVE_STM32_USBOTG) := stm32/usbotg.c
 src-$(CONFIG_USBSERIAL) += $(usb-src-y) stm32/chipid.c generic/usb_cdc.c
-canbus-src-y := generic/canserial.c ../lib/fast-hash/fasthash.c
-canbus-src-$(CONFIG_HAVE_STM32_CANBUS) += stm32/can.c
-canbus-src-$(CONFIG_HAVE_STM32_FDCANBUS) += stm32/fdcan.c
+canbus-driver-src-$(CONFIG_HAVE_STM32_CANBUS) := stm32/can.c
+canbus-driver-src-$(CONFIG_HAVE_STM32_FDCANBUS) := stm32/fdcan.c
+canbus-src-y := generic/canserial.c ../lib/fast-hash/fasthash.c \
+    $(canbus-driver-src-y)
 src-$(CONFIG_CANSERIAL) += $(canbus-src-y) generic/canbus.c stm32/chipid.c
 src-$(CONFIG_USBCANBUS) += $(usb-src-y) $(canbus-src-y)
 src-$(CONFIG_USBCANBUS) += stm32/chipid.c generic/usb_canbus.c
+# The CAN controller as a bridge downstream port (CONFIG_BRIDGE_PORT_CAN,
+# generic/bridge_can.c): the driver and the wrapper that hands its frames on
+# (generic/canbus.c), with no node on top - generic/canserial.c is the node, and
+# a bridge port is not one, the router does its own routing. Listed after the
+# lines above on purpose: uniq keeps a source's first place in src-y, and the
+# dictionary hands its message ids out in that order.
+src-$(CONFIG_BRIDGE_PORT_CAN) += $(canbus-driver-src-y) generic/canbus.c
 # The mux identity is derived from the chip id (generic/chipid_uuid.h), the
 # same way the canbus uuid is.
 src-$(CONFIG_MUX_SERIAL) += stm32/chipid.c ../lib/fast-hash/fasthash.c

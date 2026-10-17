@@ -386,7 +386,7 @@ bridge_serial_open(struct uart_s *u, uint32_t baud, int slot)
 // to. NULL for an object that opened no port (it cannot have been attached to
 // the bridge, then).
 static const struct bridge_serial_hw *
-bridge_serial_hw_of(void *ctx)
+bridge_serial_hw_of(const void *ctx)
 {
     int i;
     for (i = 0; i < bridge_serial_slot_count(); i++)
@@ -448,6 +448,15 @@ bridge_serial_port_ops(struct uart_s *u)
 {
     (void)u;
     return &bridge_serial_ops;
+}
+
+// Whether 'u' opened one of this backend's USARTs. A bridge build can carry more
+// than one kind of port (a CAN port beside these), so the dispatcher asks here
+// before handing an object the USART ops.
+int
+bridge_serial_owns(const struct uart_s *u)
+{
+    return bridge_serial_hw_of(u) != NULL;
 }
 
 // The router took this UART as the port with this index; the task feeds the
