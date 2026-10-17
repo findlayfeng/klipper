@@ -51,7 +51,7 @@
 #include "board/armcm_boot.h" // armcm_enable_irq
 #include "board/irq.h" // irq_save, irq_restore
 #include "bridge.h" // bridge_port_input, struct bridge_port_ops
-#include "command.h" // DECL_CONSTANT, DECL_CONSTANT_STR, MESSAGE_MAX
+#include "command.h" // DECL_CONSTANT_STR, MESSAGE_MAX
 #include "compiler.h" // ARRAY_SIZE, DIV_ROUND_CLOSEST
 #include "internal.h" // enable_pclock, get_pclock_frequency, gpio_peripheral, GPIO
 #include "mux.h" // MUX_HEADER_BYTES, MUX_TUNNEL_FRAME_MAX
