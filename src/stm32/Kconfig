@@ -503,31 +503,94 @@ endchoice
 # Bridge ports
 ######################################################################
 
-# Hand a hardware USART to the bridge as a downstream port: the host opens it
-# with config_uart and attaches it with config_bridge_port, and whatever is
-# wired to it is then reachable through the port-level commands and the
-# flashing tunnel. The console keeps its own carrier - a USART has one register
-# block and one interrupt vector, so this is never the console USART1, and the
-# option below excludes those choices. The other families (F0/G0/G4/H7) have a
-# different USART register block and would need a backend of their own, the way
-# the console has stm32f0_serial.c.
+# Hand hardware USARTs to the bridge as downstream ports: the host opens each one
+# with config_uart and attaches it with config_bridge_port, and whatever is wired
+# to it is then reachable through the port-level commands and the flashing
+# tunnel. The console keeps its own carrier - a USART has one register block and
+# one interrupt vector, so a port is never the console's - and each option below
+# excludes the console's choices for its own USART. The other families (F0/G0/
+# G4/H7) have a different USART register block and would need a backend of their
+# own, the way the console has stm32f0_serial.c.
+#
+# The switch below selects the two capabilities the backend needs, and each port
+# selects them again: a switch turned on with no USART ticked is a bridge with no
+# hardware port (it builds, and reports a count of 0), while one option read on
+# its own still says what it brings. Kconfig dedups.
+config STM32_BRIDGE_SERIAL
+    bool "Bridge downstream ports on hardware USARTs"
+    depends on MACH_STM32F1 || MACH_STM32F2 || MACH_STM32F4 || MACH_STM32F7 || MACH_STM32L4
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        Give the bridge downstream ports on hardware USARTs. Tick the ones this
+        board has wired (below): each ticked USART is one port, with its own
+        pins, its own receive buffer and its own interrupt.
+
+        A port's slot - the number the host names it by, and the order the host
+        lists the ports in - is its USART's place among the ticked ones, counted
+        by USART number: USART1, then USART2, USART3, UART4, UART5. Tick USART1
+        and USART2 and they are slots 0 and 1; tick USART2 alone and it is slot
+        0. Nothing can be attached to a slot this build does not offer.
+
+        Off by default: this is a bridge build's port wiring, so it is turned on
+        by the board that has USARTs to spare, never by a plain firmware.
+
+# One downstream port per USART. The host creates the port's UART object with
+# config_uart - carrying the line rate it wants, not a build-time constant - and
+# attaches it with config_bridge_port. A port has no modem lines, so its
+# port-level RESET_PORT is dropped in silence: a device without an admin channel
+# of its own has no line-level reset on this bridge.
 config STM32_BRIDGE_SERIAL_USART1
     bool "Bridge port on USART1 (PA10/PA9)"
-    depends on MACH_STM32F1 || MACH_STM32F2 || MACH_STM32F4 || MACH_STM32F7 || MACH_STM32L4
+    depends on STM32_BRIDGE_SERIAL
     depends on !STM32_SERIAL_USART1 && !STM32_SERIAL_USART1_ALT_PB7_PB6
     depends on !STM32_USB_PA11_PA12_REMAP && !STM32_CANBUS_PA11_PA12_REMAP
     select BRIDGE_PORT_SERIAL
     select MUX_SERIAL
     help
-        Give the bridge one downstream port on a hardware USART: USART1, with
-        PA10 as RX and PA9 as TX. The host creates the port's UART object with
-        config_uart - carrying the line rate it wants, not a build-time
-        constant - and attaches it with config_bridge_port.
+        One downstream port on USART1, with PA10 as RX and PA9 as TX.
 
-        The bridge carries one such port, and it is the first port the host
-        declares. The port has no modem lines, so the port-level RESET_PORT is
-        dropped in silence: a device without an admin channel of its own has no
-        line-level reset on this bridge.
+config STM32_BRIDGE_SERIAL_USART2
+    bool "Bridge port on USART2 (PA3/PA2)"
+    depends on STM32_BRIDGE_SERIAL
+    depends on !STM32_SERIAL_USART2 && !STM32_SERIAL_USART2_ALT_PA15_PA14
+    depends on !STM32_SERIAL_USART2_ALT_PB4_PB3 && !STM32_SERIAL_USART2_ALT_PD6_PD5
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        One downstream port on USART2, with PA3 as RX and PA2 as TX.
+
+config STM32_BRIDGE_SERIAL_USART3
+    bool "Bridge port on USART3 (PB11/PB10)"
+    depends on STM32_BRIDGE_SERIAL && !MACH_STM32F401
+    depends on !STM32_SERIAL_USART3 && !STM32_SERIAL_USART3_ALT_PD9_PD8
+    depends on !STM32_SERIAL_USART3_ALT_PC11_PC10
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        One downstream port on USART3, with PB11 as RX and PB10 as TX.
+
+# UART4 and UART5 are F1 only: on this part their pins are PC11/PC10 and
+# PD2/PC12, while on the F4 and F7 they are PA0/PA1 (or the same PC pins) on
+# alternate function 8, which this backend does not carry - its pins are mode 7.
+config STM32_BRIDGE_SERIAL_UART4
+    bool "Bridge port on UART4 (PC11/PC10)"
+    depends on STM32_BRIDGE_SERIAL && MACH_STM32F1
+    depends on !STM32_SERIAL_UART4
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        One downstream port on UART4, with PC11 as RX and PC10 as TX. Available
+        on the high-density F1 parts, which is where UART4 exists at all.
+
+config STM32_BRIDGE_SERIAL_UART5
+    bool "Bridge port on UART5 (PD2/PC12)"
+    depends on STM32_BRIDGE_SERIAL && MACH_STM32F1
+    select BRIDGE_PORT_SERIAL
+    select MUX_SERIAL
+    help
+        One downstream port on UART5, with PD2 as RX and PC12 as TX. Available
+        on the high-density F1 parts, which is where UART5 exists at all.
 
 choice
     prompt "CAN bus interface" if USBCANBUS
