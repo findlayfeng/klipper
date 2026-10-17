@@ -44,6 +44,21 @@
 // that cannot hear the device it was told about is worse than one that refuses the
 // configuration.
 //
+// The admin channel is the one id nobody has to be named on: an unassigned device
+// answers on MUX_ADMIN_REPLY (0x3f1), the same id for every one of them, so the port
+// arms that filter when it opens - a bridge that cannot hear the answer can never
+// be told which device is on its bus, and could never assign it an id.
+//
+// That channel is not this port's unit framing either. A CAN device's admin message
+// is one short frame whose first byte is the command itself (generic/canserial.h
+// CANBUS_ID_ADMIN / CANBUS_ID_ADMIN_RESP), so the assignment handshake is
+// translated in both directions here: a host's KXID unit on 0x3f0 goes out as the
+// frames the channel spells (bridge_can_admin_write), and an answer heard on 0x3f1
+// is rebuilt into the unit the router recognises it by (bridge_can_admin_answer).
+// An admin broadcast this wire has no frame for is dropped and counted rather than
+// sliced onto the bus as if it were a stream. Every other blob keeps the framing
+// described above.
+//
 // Receive is push, like the USART backend's: the CAN interrupt appends a node's
 // frame payload to that node's own buffer and marks how much of it is whole
 // units, and a task hands those on to bridge_port_input(). The router's work must
@@ -66,11 +81,31 @@
 #include "sched.h" // DECL_TASK, sched_wake_tasks
 #include "uart.h" // struct uart_s, enum uart_open_result
 
+// The CAN slots this build offers, named for the host's `admin bridge config`: a
+// bridge's CAN ports come after every USART slot, and the host reserves a port's
+// pins for it by this name, the way it reserves a USART backend's
+// (stm32/bridge_serial.c, RESERVE_PINS_bridge_serial*). The pins are the ones the
+// CAN slot is wired to (CONFIG_STM32_BRIDGE_CAN_PB8_PB9: PB8 RX, PB9 TX).
+DECL_CONSTANT_STR("RESERVE_PINS_bridge_can", "PB8,PB9");
+
+// The katapult bootloader's node-id command: the same [uuid][nodeid] body the
+// application's MUX_CMD_SET_KLIPPER_NODEID carries, under the command byte
+// katapult's own admin message spells it with. The two firmwares disagree on that
+// one byte and ignore each other's command, so an assignment goes out as both
+// (bridge_can_admin_write) and whichever firmware is on the bus takes it.
+#define BRIDGE_CAN_CMD_SET_BOOTLOADER_NODEID 0x11
+
 // The most blobs this port keeps queued for the wire, in frames: a unit is at
 // most MUX_HEADER_BYTES + MESSAGE_MAX bytes (9 frames), a tunnel block at most
 // MUX_TUNNEL_FRAME_MAX (16 frames), so this holds several of either and the
 // router never has to wait for the bus.
 #define BRIDGE_CAN_TX_FRAMES 32
+
+// How many admin answers this port holds for its task at once: one bus carries one
+// unassigned device in practice, and the few that a bus of them would answer with
+// still fit. Past that an answer is dropped and counted, like every other
+// overrun here.
+#define BRIDGE_CAN_ADMIN_FRAMES 4
 
 // A reassembly buffer per downstream node id: two maximum-size tunnel blocks,
 // the largest partial form this port can be handed (bridge.c's per-port buffer is
@@ -140,10 +175,22 @@ static struct {
     // Frames and blobs this port could not take, kept as the diagnostic a
     // micro-controller has (no stderr, no host-visible channel in this backend).
     uint32_t tx_unaddressed;  // no header and no id named: nowhere to send it
+    uint32_t tx_unspelled;    // an admin broadcast this wire has no frame for
     uint32_t tx_overrun;      // the queue was full
     uint32_t rx_ignored;      // another id's traffic, not this port's
     uint32_t rx_overrun;      // a node's buffer was full
 } bridge_can;
+
+// The admin answers waiting for the task: the frames heard on MUX_ADMIN_REPLY,
+// copied here by the interrupt. An answer is one frame, so nothing has to be
+// reassembled - but the unit built around it has to reach the router from a task
+// (bridge.c), so this is a handover buffer and not a stream. Written by the
+// interrupt under irq_save, drained by the task the same way.
+static struct {
+    volatile uint8_t head, tail;
+    uint8_t len[BRIDGE_CAN_ADMIN_FRAMES];
+    uint8_t data[BRIDGE_CAN_ADMIN_FRAMES][8];
+} bridge_can_admin;
 
 
 /****************************************************************
@@ -321,12 +368,48 @@ bridge_can_node_get(uint32_t node_id)
     return NULL;
 }
 
+// An admin answer heard on the bus: an unassigned device's NEED_NODEID, whole in
+// one frame (the channel's payload is the command byte, its uuid, and the
+// application byte when the device sends one). Copied here for the task; the
+// frame is not a node's stream and has no unit framing to reassemble.
+//
+// Everything else on this id is somebody else's answer or a shape this port
+// cannot forward - dropped and counted, since the channel asks for no receipt.
+// Consumed either way: the id is the admin channel of the whole bus, not another
+// device's data.
+static int
+bridge_can_admin_answer(struct canbus_msg *msg)
+{
+    uint_fast8_t len = CANMSG_DATA_LEN(msg);
+    if (bridge_can.port <= 0 || (msg->id & CANMSG_ID_RTR)
+        || len < 1 + MUX_UUID_LEN || msg->data[0] != MUX_RESP_NEED_NODEID) {
+        bridge_can.rx_ignored++;
+        return 1;
+    }
+    irqstatus_t flag = irq_save();
+    uint8_t tail = bridge_can_admin.tail;
+    uint8_t next = (tail + 1) % BRIDGE_CAN_ADMIN_FRAMES;
+    if (next == bridge_can_admin.head) {
+        bridge_can.rx_overrun++;
+        irq_restore(flag);
+        return 1;
+    }
+    memcpy(bridge_can_admin.data[tail], msg->data, len);
+    bridge_can_admin.len[tail] = len;
+    bridge_can_admin.tail = next;
+    irq_restore(flag);
+    sched_wake_tasks();
+    return 1;
+}
+
 // A frame heard on the bus (canbus.c, from the driver's interrupt). A frame of a
 // node behind this port is one more slice of that node's stream; every other id
 // on the bus is somebody else's traffic and is not this port's to consume.
 int
 bridge_can_process_data(struct canbus_msg *msg)
 {
+    if (msg->id == MUX_ADMIN_REPLY)
+        return bridge_can_admin_answer(msg);
     uint32_t node_id = mux_node_id_from_arb(msg->id);
     if (!node_id)
         return 0;
@@ -366,6 +449,31 @@ bridge_can_task(void)
     int index = bridge_can.port - 1;
     if (index < 0)
         return;
+    // The admin answers first, each as the one whole unit the router knows them
+    // by (mux_kxid_unit): the header naming the reply id, then the pseudo-frame
+    // around the bytes the device sent. Built here rather than in the interrupt -
+    // the frame's CRC is not the interrupt's work - and handed over outside the
+    // lock, the way the nodes' pieces are.
+    uint8_t unit[MUX_HEADER_BYTES + MESSAGE_MAX];
+    for (;;) {
+        irqstatus_t flag = irq_save();
+        uint8_t head = bridge_can_admin.head;
+        if (head == bridge_can_admin.tail) {
+            irq_restore(flag);
+            break;
+        }
+        uint_fast8_t frame_len = bridge_can_admin.len[head];
+        uint8_t frame[8];
+        memcpy(frame, bridge_can_admin.data[head], frame_len);
+        bridge_can_admin.head = (head + 1) % BRIDGE_CAN_ADMIN_FRAMES;
+        irq_restore(flag);
+        uint_fast8_t len = mux_kxid_unit(unit, sizeof(unit), MUX_ADMIN_REPLY
+                                        , frame, frame_len);
+        if (len)
+            bridge_port_input(index, unit, len);
+        else
+            bridge_can.rx_ignored++;   // cannot be framed: nothing to forward
+    }
     int i;
     for (i = 0; i < BRIDGE_CAN_NODE_MAX; i++) {
         struct bridge_can_node *n = &bridge_can_nodes[i];
@@ -404,12 +512,27 @@ bridge_can_open(struct uart_s *u, uint32_t baud)
     bridge_can.node_id = 0;
     bridge_can.tx_head = bridge_can.tx_tail = 0;
     bridge_can.tx_busy = 0;
+    bridge_can_admin.head = bridge_can_admin.tail = 0;
     int i;
     for (i = 0; i < BRIDGE_CAN_NODE_MAX; i++) {
         bridge_can_nodes[i].node_id = 0;
         bridge_can_nodes[i].len = 0;
         bridge_can_nodes[i].ready = 0;
     }
+#if CONFIG_CANBUS_FILTER_MULTI
+    // The whole bus's admin answer id: every unassigned device answers there, so
+    // it is exactly one id and no mask. Armed here rather than with the port's
+    // node id, because a device that has no id yet is what this port has to hear
+    // to be able to give it one.
+    if (canhw_add_filter(MUX_ADMIN_REPLY, 0x7FF) < 0)
+        shutdown("bridge CAN port: no filter bank for the CAN admin answer");
+#else
+    // Without a spare bank the port cannot hear an unassigned device at all, so
+    // it cannot be scanned for or assigned: that is a configuration that reads
+    // as working and never does, so refuse it here.
+    shutdown("bridge CAN port: cannot listen to the CAN admin answer"
+             " (CONFIG_CANBUS_FILTER_MULTI is off)");
+#endif
     return UART_OPEN_OK;
 }
 
@@ -448,6 +571,58 @@ bridge_can_set_node_id(void *ctx, uint8_t node_id)
 #endif
 }
 
+// A host's admin broadcast, translated into the frames a CAN device's admin
+// channel spells. The host sends a whole KXID unit like it sends every other
+// admin broadcast, but the device behind this port listens for one short frame
+// per command, its first byte being the command itself (generic/canserial.h
+// CANBUS_ID_ADMIN). So the unit's frame is read as a KXID body and answered with
+// the frames that mean the same thing on the bus:
+//
+//   MUX_CMD_QUERY_UNASSIGNED   [0x00]                 one frame, nothing else
+//   MUX_CMD_SET_KLIPPER_NODEID [0x01][uuid][nodeid]   the application's command
+//                              [0x11][uuid][nodeid]   katapult's, same body
+//
+// An assignment goes out as both because the port does not know which firmware
+// is on the other side of it, and the case that brought the host here - a device
+// parked in its bootloader - is the one neither side can rule out. Each firmware
+// ignores the command byte it does not know, so exactly one of the two takes
+// effect.
+//
+// The port-level and device commands (0x02..0x06) never reach this: bridge.c
+// routes and consumes them itself. Anything else a host puts on the admin id is
+// dropped and counted (tx_unspelled) rather than sliced onto the bus as if it
+// were a stream, which is what the path below would otherwise do with it.
+static int
+bridge_can_admin_write(const uint8_t *frame, size_t frame_len)
+{
+    struct mux_kxid kxid;
+    // mux_parse_kxid() only reads the frame, but it spells its parameter as
+    // writable (it is called on stream buffers elsewhere).
+    if (!mux_parse_kxid((uint8_t *)frame, frame_len, &kxid) || !kxid.args_len) {
+        bridge_can.tx_unspelled++;
+        return -1;
+    }
+    uint8_t out[1 + MUX_UUID_LEN + 1];
+    if (kxid.args[0] == MUX_CMD_QUERY_UNASSIGNED) {
+        out[0] = MUX_CMD_QUERY_UNASSIGNED;
+        return bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, 1);
+    }
+    if (kxid.args[0] == MUX_CMD_SET_KLIPPER_NODEID
+        && kxid.args_len >= 1 + MUX_UUID_LEN + 1) {
+        // The same [uuid][nodeid] body under both command bytes, one frame
+        // after the other in the same queue: the pair is a single broadcast as
+        // far as the devices are concerned.
+        out[0] = MUX_CMD_SET_KLIPPER_NODEID;
+        memcpy(&out[1], &kxid.args[1], MUX_UUID_LEN + 1);
+        if (bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, sizeof(out)) < 0)
+            return -1;
+        out[0] = BRIDGE_CAN_CMD_SET_BOOTLOADER_NODEID;
+        return bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, sizeof(out));
+    }
+    bridge_can.tx_unspelled++;
+    return -1;
+}
+
 // The router's write hook: one blob, sent whole on the address it names or on the
 // port's node id when the router stripped the header.
 static int
@@ -461,6 +636,11 @@ bridge_can_write(void *ctx, const uint8_t *data, size_t len)
         return 0;
     if (mux_decode_header(data, len, &arb, &consumed)
         == MUX_HEADER_COMPLETE) {
+        if (arb == MUX_ADMIN_LISTEN)
+            // An admin broadcast: this port's devices do not read the mux
+            // framing at all, and the unit has to be translated before its
+            // header is stripped (the body is a pseudo-frame, not a stream).
+            return bridge_can_admin_write(data + consumed, len - consumed);
         // A unit: its header is this port's framing, so the frame after it is
         // what goes on the wire, under the address the header named.
         data += consumed;
