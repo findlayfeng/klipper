@@ -195,21 +195,21 @@ config BRIDGE_PORT_SERIAL
     bool
 # The same for CAN: one CAN controller of this build (generic/bridge_can.c) is a
 # downstream port, so the devices on that bus are reached through the bridge's
-# port commands instead of being nodes of this firmware's own CAN. It is a UART
-# object all the same - the host creates it with config_uart and attaches it with
-# config_bridge_port - so the object layer comes with it; only the rate is not a
-# UART's (CONFIG_CANBUS_FREQUENCY, not the baud the host asks for).
+# port commands instead of being nodes of this firmware's own CAN. It is a port
+# object all the same - the host creates it with config_can and attaches it with
+# config_bridge_port - so the object layer comes with it; only the rate is the
+# bus bitrate the host asks for, not a UART's baud.
 config BRIDGE_PORT_CAN
     bool
     select UART
 
 # The port object layer (src/port.c): an oid a host creates at
-# configuration time, the line rate it asked for, and the seam an arch fills.
+# configuration time, the rate it asked for, and the seam an arch fills.
 config UART
     bool
-# A byte stream an arch can attach to a UART object: the host library's tty
-# backend (src/host/bridge.c) today. An arch selects this once it can hand a
-# UART object out as a bridge port.
+# A wire an arch can attach to a port object: the host library's tty backend
+# (src/host/bridge.c) today. An arch selects this once it can hand a port object
+# out as a bridge port.
 config SERIAL_UART
     bool
     select UART

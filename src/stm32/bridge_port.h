@@ -33,9 +33,9 @@ enum port_open_result bridge_serial_open(struct port_s *p, uint32_t rate,
 // The router's ops for 'p' as a downstream port.
 const struct bridge_port_ops *bridge_serial_port_ops(struct port_s *p);
 
-// Whether 'p' is an object this backend opened. One build can carry more than one
-// kind of port, so the dispatcher (bridge_port.c) asks each backend which objects
-// are its own before answering port.h's hooks.
+// Whether 'p' is an object this backend opened. One build can carry more than
+// one kind of port, so the dispatcher (bridge_port.c) asks each backend which
+// objects are its own before answering port.h's hooks.
 int bridge_serial_owns(const struct port_s *p);
 
 // The bridge took 'p' as a downstream port with this index.

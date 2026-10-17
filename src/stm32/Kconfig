@@ -595,31 +595,43 @@ config STM32_BRIDGE_SERIAL_UART5
 # The CAN controller as a bridge downstream port, after every USART port in the
 # slot numbering: the devices wired to this bus are reached through the bridge's
 # port commands, and this firmware itself is not a node on that bus (no
-# CANSERIAL, no MUX_CAN). The rate is CONFIG_CANBUS_FREQUENCY - one rate for the
-# whole bus - so the baud the host sends in config_uart is a dummy here
-# (generic/bridge_can.c). One controller is one port; CANBUS_FILTER_MULTI is what
-# lets the port hear the ids of the devices the host names behind it.
+# CANSERIAL, no MUX_CAN, and so no CANBUS either - a port is not a node). The
+# rate is the port's own, picked by the host with config_can
+# (generic/bridge_can.c, src/port.c). One controller is one port;
+# CANBUS_FILTER_MULTI is what lets the port hear the ids of the devices the host
+# names behind it.
 config STM32_BRIDGE_CAN_PB8_PB9
     bool "Bridge CAN downstream port (PB8/PB9)"
     depends on HAVE_STM32_CANBUS
     depends on !(MACH_STM32F1 && USBSERIAL)
-    select CANBUS
+    # A node and a port on one bus would answer for each other: the port's admin
+    # proxy consumes every answer on 0x3f1, the id another node's devices answer
+    # on too.
+    depends on !CANSERIAL && !MUX_CAN
     select CANBUS_FILTER_MULTI
     select BRIDGE_PORT_CAN
     help
         Give the bridge a downstream port on the bxCAN controller, wired to PB8
         (RX) and PB9 (TX).
 
-        The port is opened like a UART object (config_uart + config_bridge_port)
+        The port is created like a UART port (config_can + config_bridge_port)
         and comes after every USART port in the slot numbering. Its CAN rate is
-        the build's CAN bus speed (CANBUS_FREQUENCY), not the baud the host asks
-        for: a CAN bus runs at one rate for everything on it.
+        the host's to pick: config_can carries the bus bitrate, and a rate this
+        controller cannot be set to fails the host's configuration. A CAN bus
+        runs at one rate for everything on it, so every device behind this port
+        has to be on that rate.
 
-        This selects CANBUS only - the driver and the wrapper that hands its
-        frames on (generic/canbus.c) - and never CANSERIAL or MUX_CAN: this
-        firmware is not a node on that bus, the CAN controller is a port of the
-        bridge, and the bridge does the routing. CANBUS_FILTER_MULTI is what
-        lets the port hear the ids of the devices the host names behind it.
+        This is not a CAN node. CANBUS stays off, and the driver and the wrapper
+        that hands its frames on (generic/canbus.c) come in through
+        BRIDGE_PORT_CAN's Makefile line (src/stm32/Makefile) instead -
+        upstream's CANBUS means "this build is a node on that bus", and a port
+        is not one. CANSERIAL and MUX_CAN are refused above for the same rea-
+        son the port is usable at all: the port's admin proxy consumes every
+        answer on the bus's admin reply id (0x3f1), which is the id another
+        node's devices answer on too, so a node in the same build would never
+        hear its own devices and neither side could be reached.
+        CANBUS_FILTER_MULTI is what lets the port hear the ids of the devices
+        the host names behind it.
 
         On the F1 the USB peripheral and CAN1 RX0 share interrupt vector 20
         (USB_LP_CAN1_RX0_IRQn), so an F1 bridge takes its console on a USART

@@ -25,8 +25,9 @@
 #include "sched.h" // sched_shutdown (used by shutdown())
 #include "port.h" // the object layer's seam
 
-// One port object. The rate is what the host asked for; the wire behind it is
-// the backend's, kept in 'ctx' when a backend needs per-object state.
+// One port object. The rate is what the host asked for (a baud for a UART port,
+// a bitrate for a CAN port); the wire behind it is the backend's, kept in 'ctx'
+// when a backend needs per-object state.
 struct port_s {
     uint32_t rate;
     void *ctx;
@@ -64,6 +65,43 @@ command_config_uart(uint32_t *args)
     }
 }
 DECL_COMMAND(command_config_uart, "config_uart oid=%c baud=%u slot=%c");
+
+// Create a CAN port object at the bitrate the host asks for, on the bridge port
+// (the "slot" on the wire) the object belongs to. The same shape as the UART
+// command above, because it is the same object - only the rate is a bus bitrate
+// instead of a line baud, and the messages say so: a rate a CAN controller
+// cannot be set to is not a baud the host could lower, it is the rate the bus it
+// is on runs at.
+void
+command_config_can(uint32_t *args)
+{
+    uint8_t oid = args[0];
+    uint32_t bitrate = args[1];
+    int slot = args[2];
+    // A CAN port is a port object like the UART one, so both commands allocate
+    // it under config_uart's tag - the way config_spi_without_cs uses
+    // config_spi's (src/spicmds.c). config_bridge_port looks an oid up by that
+    // one tag, so it takes either command's object and does not care which made
+    // it.
+    struct port_s *p = oid_alloc(oid, command_config_uart, sizeof(*p));
+    p->rate = bitrate;
+    p->ctx = NULL;
+    if (!bitrate)
+        shutdown("config_can: bitrate must be nonzero");
+    switch (port_backend_open(p, bitrate, slot)) {
+    case PORT_OPEN_OK:
+        break;
+    case PORT_OPEN_BAD_BAUD:
+        shutdown("config_can: the CAN port cannot be set to the requested"
+                 " bitrate");
+    case PORT_OPEN_BUSY:
+        shutdown("config_can: the port slot is already in use");
+    case PORT_OPEN_NO_DEVICE:
+    default:
+        shutdown("config_can: the CAN controller could not be opened");
+    }
+}
+DECL_COMMAND(command_config_can, "config_can oid=%c bitrate=%u slot=%c");
 
 #if CONFIG_BRIDGE
 // A bridge port object: the oid the host names the port by, and the port object

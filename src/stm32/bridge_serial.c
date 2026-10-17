@@ -29,9 +29,11 @@
 // both at the same time. Each USART's Kconfig option excludes the console's
 // choices for that USART.
 //
-// The rate is not a build-time fact: config_uart carries it, so the BRR is
-// computed here while the host is configuring the object - never
-// CONFIG_SERIAL_BAUD, which belongs to the console's fixed carrier.
+// The rate is the port's own baud, and it is not a build-time fact: config_uart
+// carries it, so the BRR is computed here while the host is configuring the
+// object - never CONFIG_SERIAL_BAUD, which belongs to the console's fixed
+// carrier. (A CAN port takes the same seam, but its 'rate' is the bus bitrate -
+// generic/bridge_can.c.)
 //
 // Receive is push, the way it is on every arch: the interrupt appends to a ring
 // and a task drains it into bridge_port_input() (the router has no poll hook,

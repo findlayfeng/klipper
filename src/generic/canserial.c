@@ -456,8 +456,9 @@ canserial_set_uuid(uint8_t *raw_uuid, uint32_t raw_uuid_len)
     // The mux identity is the same six bytes (generic/chipid_uuid.h), so this
     // node answers a mux scan with the uuid its canbus_uuid reports. This is
     // where the CAN carrier takes it from: the arch's chipid.c already calls
-    // here under CONFIG_CANBUS, on every arch CAN can be built for, and
-    // chipid_init runs before the console comes up.
+    // here in a build that carries a CAN node (CANSERIAL or USBCANBUS), on every
+    // arch CAN can be built for, and chipid_init runs before the console comes
+    // up.
     mux_set_uuid(CanData.uuid);
 #endif
     canserial_notify_rx();

@@ -209,6 +209,11 @@ canhw_add_filter(uint32_t arb, uint32_t mask)
 }
 #endif
 
+// The id the receive filter bank is armed with: stored by canhw_set_filter(),
+// because a rate change has to re-install the filter and the id it belongs to is
+// not a fact of the rate (canhw_set_rate()).
+static uint32_t can_filter_id;
+
 // Setup the receive packet filter
 void
 canhw_set_filter(uint32_t id)
@@ -236,6 +241,7 @@ canhw_set_filter(uint32_t id)
         fcan->sFilterRegister[0].FR2 = 0;
         id = 0;
     }
+    can_filter_id = id;
 
     /* 32-bit scale for the filter */
     fcan->FS1R = (1<<0) | (1<<1) | (1<<2);
@@ -370,23 +376,26 @@ compute_btr(uint32_t pclock, uint32_t bitrate)
     return make_btr(sjw, time_seg1, time_seg2, brp);
 }
 
-void
-can_init(void)
+// Set the rate of the bus this controller is on. Called at power-up with the
+// build's CAN rate, and again when a bridge CAN port is opened for a rate the
+// host picked (generic/bridge_can.c). The bit time is written in initialisation
+// mode only, which stops the controller, and the filter bank is re-installed
+// afterwards for the id it was last armed with: a node id set before the rate
+// change must not be lost to a filter bank that was never re-armed. Returns 0 on
+// success, -1 when this clock has no bit time for the rate.
+int
+canhw_set_rate(uint32_t bitrate)
 {
-    // Enable clock
-    enable_pclock((uint32_t)SOC_CAN);
-    if (FILTER_CAN != SOC_CAN)
-        // Also enable CAN1 clock if using CAN2 with filter on CAN1
-        enable_pclock((uint32_t)FILTER_CAN);
-
-    gpio_peripheral(GPIO_Rx, CAN_FUNCTION, 1);
-    gpio_peripheral(GPIO_Tx, CAN_FUNCTION, 0);
-
     uint32_t pclock = get_pclock_frequency((uint32_t)SOC_CAN);
+    uint32_t bit_clocks = bitrate ? pclock / bitrate : 0;
+    // The bit time is 9..18 quanta of a 1..1024 prescaler, so a rate that gives
+    // fewer than 10 clocks per bit, or needs more than 1024 clocks per quantum,
+    // has no BTR value at all.
+    if (bit_clocks < 10 || bit_clocks > 1024 * 9)
+        return -1;
+    uint32_t btr = compute_btr(pclock, bitrate);
 
-    uint32_t btr = compute_btr(pclock, CONFIG_CANBUS_FREQUENCY);
-
-    /*##-1- Configure the CAN #######################################*/
+    /*##-1- Set the bit time #######################################*/
 
     /* Request initialisation */
     SOC_CAN->MCR = CAN_MCR_INRQ;
@@ -402,6 +411,26 @@ can_init(void)
     /* Wait the acknowledge */
     while (SOC_CAN->MSR & CAN_MSR_INAK)
         ;
+
+    /*##-2- Re-install the receive filter for the id it holds #######*/
+    canhw_set_filter(can_filter_id);
+    return 0;
+}
+
+void
+can_init(void)
+{
+    // Enable clock
+    enable_pclock((uint32_t)SOC_CAN);
+    if (FILTER_CAN != SOC_CAN)
+        // Also enable CAN1 clock if using CAN2 with filter on CAN1
+        enable_pclock((uint32_t)FILTER_CAN);
+
+    gpio_peripheral(GPIO_Rx, CAN_FUNCTION, 1);
+    gpio_peripheral(GPIO_Tx, CAN_FUNCTION, 0);
+
+    /*##-1- Configure the CAN #######################################*/
+    canhw_set_rate(CONFIG_CANBUS_FREQUENCY);
 
     /*##-2- Configure the CAN Filter #######################################*/
     canhw_set_filter(0);

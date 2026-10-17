@@ -14,10 +14,11 @@ struct canbus_msg;
 // stm32/bridge_port.c); this header is what the dispatcher and the CAN wrapper
 // call, the way canserial.h is what canbus.c calls.
 
-// Open this build's CAN controller for 'p'. The rate is CONFIG_CANBUS_FREQUENCY,
-// so 'rate' is a dummy parameter and ignored, and the one controller takes one
-// object (a second is refused with PORT_OPEN_BUSY).
-enum port_open_result bridge_can_open(struct port_s *p, uint32_t rate);
+// Open this build's CAN controller for 'p' at 'bitrate' bits per second. The
+// rate is the port's, not the build's (config_can carries it), and a rate this
+// controller cannot be set to is refused with PORT_OPEN_BAD_BAUD. The one
+// controller takes one object (a second is refused with PORT_OPEN_BUSY).
+enum port_open_result bridge_can_open(struct port_s *p, uint32_t bitrate);
 
 // Whether 'p' is the object that opened the CAN controller - how the dispatcher
 // tells a CAN port from a USART one.

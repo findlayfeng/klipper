@@ -35,8 +35,8 @@ usbserial_get_serialid(void)
 void
 chipid_init(void)
 {
-    if (!CONFIG_USB_SERIAL_NUMBER_CHIPID && !CONFIG_CANBUS
-        && !CONFIG_MUX_SERIAL)
+    if (!CONFIG_USB_SERIAL_NUMBER_CHIPID
+        && !(CONFIG_CANSERIAL || CONFIG_USBCANBUS) && !CONFIG_MUX_SERIAL)
         return;
 
     uint32_t iap_cmd_uid[5] = {IAP_CMD_READ_UID, 0, 0, 0, 0};
@@ -50,7 +50,7 @@ chipid_init(void)
         usb_fill_serial(&cdc_chipid.desc, ARRAY_SIZE(cdc_chipid.data)
                         , &iap_resp[1]);
 
-    if (CONFIG_CANBUS)
+    if (CONFIG_CANSERIAL || CONFIG_USBCANBUS)
         canserial_set_uuid((void*)&iap_resp[1], IAP_UID_LEN);
 
 #if CONFIG_MUX_SERIAL

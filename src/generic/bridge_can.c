@@ -31,9 +31,11 @@
 //     nothing here may block or shut the build down over one unroutable blob.
 //
 // The rate is not a config_uart baud: a CAN bus runs at one rate for every device
-// on it, CONFIG_CANBUS_FREQUENCY, which canbus.c reports to the host
-// (DECL_CONSTANT "CANBUS_FREQUENCY"). config_uart's baud is therefore a dummy
-// parameter in this backend and is ignored on purpose.
+// on it, and which rate that is belongs to the port - config_can carries it
+// (src/port.c) and bridge_can_open() sets the controller to it before any filter
+// is armed. A bridge build reports no CANBUS_FREQUENCY of its own (canbus.c): the
+// port's rate is the answer, and a build-wide one would be a second, misleading
+// one.
 //
 // Listening: the devices behind this port answer on ids of their own, which the
 // bridge learns only when the host names the port - SET_PORT_NODEID, which reaches
@@ -75,7 +77,7 @@
 #include "board/irq.h" // irq_save, irq_restore
 #include "bridge.h" // bridge_port_input, struct bridge_port_ops
 #include "bridge_can.h" // bridge_can_open, bridge_can_process_data
-#include "canbus.h" // canhw_add_filter, canbus_send, struct canbus_msg
+#include "canbus.h" // canhw_set_rate, canhw_add_filter, canbus_send
 #include "command.h" // MESSAGE_MIN, MESSAGE_MAX, shutdown
 #include "mux.h" // mux_decode_header, mux_arb_id, MUX_TUNNEL_*
 #include "sched.h" // DECL_TASK, sched_wake_tasks
@@ -498,15 +500,18 @@ DECL_TASK(bridge_can_task);
  * The port's seam (port.h, answered for this backend by bridge_port.c)
  ****************************************************************/
 
-// Open this build's CAN controller for 'p'. The rate is CONFIG_CANBUS_FREQUENCY
-// (canbus.c reports it to the host), so 'rate' is a dummy parameter here - see
-// the note at the top of this file - and the controller takes one object.
+// Open this build's CAN controller for 'p' at 'bitrate' bits per second. The rate
+// is the port's own, not the build's: the host picks it when it creates the port
+// (config_can), and the controller is set to it before the port's filters are
+// armed - a filter armed first would be a filter on a bus this controller has no
+// bit time for yet. The one controller takes one object.
 enum port_open_result
-bridge_can_open(struct port_s *p, uint32_t rate)
+bridge_can_open(struct port_s *p, uint32_t bitrate)
 {
-    (void)rate;
     if (bridge_can.owner)
         return PORT_OPEN_BUSY;
+    if (!bitrate || canhw_set_rate(bitrate) < 0)
+        return PORT_OPEN_BAD_BAUD;
     bridge_can.owner = p;
     bridge_can.port = 0;
     bridge_can.node_id = 0;

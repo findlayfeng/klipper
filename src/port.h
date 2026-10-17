@@ -6,7 +6,9 @@
 // A bridge port object (CONFIG_UART): the oid a host creates at configuration
 // time, the rate it asked for, and the seam below. It is the object a bridge
 // port is made of, not a UART as such - the wire behind it is whichever backend
-// the arch offers for the slot it was created on.
+// the arch offers for the slot it was created on, and the two commands that
+// create one differ only in the rate they carry: config_uart for a UART port (a
+// baud), config_can for a CAN port (a bitrate) - both in src/port.c.
 //
 // The object is the transport-neutral half - the oid, the rate, and the seam
 // below. Which wires a build can offer is the arch's (CONFIG_SERIAL_UART): the
@@ -16,10 +18,10 @@
 // task loop; a micro-controller arch would wire its serial task here instead.
 //
 // The rate and the port's wire are configuration facts, not build-time ones:
-// config_uart carries the rate and the port slot, so a rate the build cannot
-// offer, a wire it cannot open, or a second object on a slot already open is
-// reported while the host is configuring - not left behind as a dead port
-// later.
+// config_uart and config_can carry the rate and the port slot, so a rate the
+// build cannot offer, a wire it cannot open, or a second object on a slot
+// already open is reported while the host is configuring - not left behind as a
+// dead port later.
 
 struct port_s;
 
@@ -33,11 +35,13 @@ enum port_open_result {
 
 // Open the wire behind 'p' at 'rate' on bridge port 'slot' - the slot the
 // object was created with, whose tty the host named before the device came up
-// (klipper_host_port). 'rate' is the rate the host asked for in config_uart: the
-// baud a USART backend is set to. Called once per object, when the host
-// configures it; a slot out of the build's range, or one another object already
-// opened, is refused instead of served. The result names why a failure failed;
-// the caller reports it (shutdown()) with a message of its own.
+// (klipper_host_port). 'rate' is the rate the host asked for when it created
+// the object, in the units that wire counts in: the baud a USART backend is set
+// to (config_uart), or the bitrate a CAN backend sets its bus to (config_can).
+// Called once per object, when the host configures it; a slot out of the build's
+// range, or one object another already opened, is refused instead of served.
+// The result names why a failure failed; the caller reports it (shutdown()) with
+// a message of its own.
 enum port_open_result port_backend_open(struct port_s *p, uint32_t rate,
                                         int slot);
 
