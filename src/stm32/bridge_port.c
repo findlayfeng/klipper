@@ -52,13 +52,19 @@ DECL_CONSTANT("BRIDGE_UART_COUNT", BRIDGE_UART_COUNT);
 enum uart_open_result
 uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
 {
+    int can_slot = slot;
+#if CONFIG_BRIDGE_PORT_SERIAL
     // The UART slots first, in the order bridge_serial.c numbers them.
     if (slot >= 0 && slot < bridge_serial_slot_count())
         return bridge_serial_open(u, baud, slot);
-#if CONFIG_BRIDGE_PORT_CAN
     // Then the CAN slots, counted from zero after the UART slots.
-    if (slot - bridge_serial_slot_count() == 0)
+    can_slot = slot - bridge_serial_slot_count();
+#endif
+#if CONFIG_BRIDGE_PORT_CAN
+    if (can_slot == 0)
         return bridge_can_open(u, baud);
+#else
+    (void)can_slot;
 #endif
     return UART_OPEN_NO_DEVICE;
 }
@@ -76,7 +82,13 @@ uart_backend_port_ops(struct uart_s *u)
     if (bridge_can_owns(u))
         return bridge_can_port_ops(u);
 #endif
+#if CONFIG_BRIDGE_PORT_SERIAL
     return bridge_serial_port_ops(u);
+#else
+    // No USART backend in this build (a CAN-only port): every object that
+    // opened a port is the CAN backend's, so its ops are the answer.
+    return bridge_can_port_ops(u);
+#endif
 }
 
 // The router took 'u' as the port with this index; the backend that opened it
@@ -90,6 +102,11 @@ uart_backend_set_port(struct uart_s *u, int index)
         return;
     }
 #endif
+#if CONFIG_BRIDGE_PORT_SERIAL
     bridge_serial_set_port(u, index);
+#else
+    (void)u;
+    (void)index;
+#endif
 }
 #endif // CONFIG_BRIDGE
