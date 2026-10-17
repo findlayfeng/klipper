@@ -597,6 +597,12 @@ bridge_can_set_node_id(void *ctx, uint8_t node_id)
 // routes and consumes them itself. Anything else a host puts on the admin id is
 // dropped and counted (tx_unspelled) rather than sliced onto the bus as if it
 // were a stream, which is what the path below would otherwise do with it.
+//
+// Answers 1 when it put a frame on the wire, 0 for a command this channel has no
+// frame for - the device commands 0x02/0x05 among them. Those are the mux
+// device's own (REQUEST_BOOTLOADER, RESTART_DEVICE): a device that speaks units
+// reads them in its stream, so the caller sends the unit as one more blob
+// instead of translating it away.
 static int
 bridge_can_admin_write(const uint8_t *frame, size_t frame_len)
 {
@@ -605,12 +611,13 @@ bridge_can_admin_write(const uint8_t *frame, size_t frame_len)
     // writable (it is called on stream buffers elsewhere).
     if (!mux_parse_kxid((uint8_t *)frame, frame_len, &kxid) || !kxid.args_len) {
         bridge_can.tx_unspelled++;
-        return -1;
+        return 0;
     }
     uint8_t out[1 + MUX_UUID_LEN + 1];
     if (kxid.args[0] == MUX_CMD_QUERY_UNASSIGNED) {
         out[0] = MUX_CMD_QUERY_UNASSIGNED;
-        return bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, 1);
+        bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, 1);
+        return 1;
     }
     if (kxid.args[0] == MUX_CMD_SET_KLIPPER_NODEID
         && kxid.args_len >= 1 + MUX_UUID_LEN + 1) {
@@ -620,12 +627,12 @@ bridge_can_admin_write(const uint8_t *frame, size_t frame_len)
         out[0] = MUX_CMD_SET_KLIPPER_NODEID;
         memcpy(&out[1], &kxid.args[1], MUX_UUID_LEN + 1);
         if (bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, sizeof(out)) < 0)
-            return -1;
+            return 1;
         out[0] = BRIDGE_CAN_CMD_SET_BOOTLOADER_NODEID;
-        return bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, sizeof(out));
+        bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, sizeof(out));
+        return 1;
     }
-    bridge_can.tx_unspelled++;
-    return -1;
+    return 0;
 }
 
 // The router's write hook: one blob, sent whole on the address it names or on the
@@ -641,14 +648,15 @@ bridge_can_write(void *ctx, const uint8_t *data, size_t len)
         return 0;
     if (mux_decode_header(data, len, &arb, &consumed)
         == MUX_HEADER_COMPLETE) {
-        if (arb == MUX_ADMIN_LISTEN) {
-            // An admin broadcast: this port's devices do not read the mux
-            // framing at all, and the unit has to be translated before its
-            // header is stripped (the body is a pseudo-frame, not a stream).
-            return bridge_can_admin_write(data + consumed, len - consumed);
-        }
+        if (arb == MUX_ADMIN_LISTEN
+            && bridge_can_admin_write(data + consumed, len - consumed))
+            // An admin broadcast this channel spells (a scan, an assignment):
+            // it went out as the single frame the CAN devices answer to.
+            return 0;
         // A unit: its header is this port's framing, so the frame after it is
-        // what goes on the wire, under the address the header named.
+        // what goes on the wire, under the address the header named. The
+        // device commands (0x02/0x05) arrive this way too: a mux device reads
+        // them in its stream, so they are never translated.
         data += consumed;
         len -= consumed;
     } else if (bridge_can.node_id) {
