@@ -66,8 +66,8 @@ read_chip_id(uint32_t *id)
 void
 chipid_init(void)
 {
-    if (!CONFIG_USB_SERIAL_NUMBER_CHIPID && !CONFIG_CANBUS
-        && !CONFIG_MUX_SERIAL)
+    if (!CONFIG_USB_SERIAL_NUMBER_CHIPID
+        && !(CONFIG_CANSERIAL || CONFIG_USBCANBUS) && !CONFIG_MUX_SERIAL)
         return;
 
     uint32_t id[4];
@@ -78,7 +78,7 @@ chipid_init(void)
     if (CONFIG_USB_SERIAL_NUMBER_CHIPID)
         usb_fill_serial(&cdc_chipid.desc, ARRAY_SIZE(cdc_chipid.data), id);
 
-    if (CONFIG_CANBUS)
+    if (CONFIG_CANSERIAL || CONFIG_USBCANBUS)
         canserial_set_uuid((void*)id, CHIP_UID_LEN);
 
 #if CONFIG_MUX_SERIAL

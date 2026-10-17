@@ -14,7 +14,14 @@
 #include "canserial.h" // canserial_notify_tx
 #endif
 
+#if CONFIG_CANSERIAL || CONFIG_USBCANBUS
+// A node on this bus has one rate for its whole life, and the host checks the
+// build's rate against the bus it is wiring up. A bridge CAN port has no node of
+// its own: its rate is the host's to pick when it creates the port (config_can,
+// src/port.c), so declaring a build-wide rate here would be a second, misleading
+// answer to the same question.
 DECL_CONSTANT("CANBUS_FREQUENCY", CONFIG_CANBUS_FREQUENCY);
+#endif
 
 int
 canbus_send(struct canbus_msg *msg)

@@ -4,8 +4,8 @@
 // is CONFIG_BRIDGE and the device half CONFIG_MUX, both transport-neutral (see
 // src/Kconfig); this file is the arch backend that gives a bridge its stream on
 // a linux process (CONFIG_LINUX_BRIDGE_SERIAL): it opens the tty the launcher
-// named for the port when the host creates a UART object (config_uart,
-// src/uart.c), puts it in the raw mode the protocol needs, registers it as a
+// named for the port when the host creates a port object (config_uart,
+// src/port.c), puts it in the raw mode the protocol needs, registers it as a
 // downstream port, and polls it from the task loop (bridge_poll_task) so its
 // bytes reach the router next to the process's other work instead of blocking a
 // thread on it, the way src/host/bridge.c polls its own ttys. The task loop
@@ -19,14 +19,14 @@
 // host names the port with klipper_host_port() in the same image - there is no
 // call to hand the path over. A launcher sets the variable before the process
 // starts; a port with no path in the environment fails its configuration
-// (UART_OPEN_NO_DEVICE), the same way a tty that cannot be opened does.
+// (PORT_OPEN_NO_DEVICE), the same way a tty that cannot be opened does.
 //
 // The port's rate is the parameter the host sent with config_uart; nothing here
 // is opened at init, because which stream a port carries is a configuration
 // fact. One stream is served: the whole backend is one static stream, and a
 // second port (any slot but 0) is refused rather than silently sharing it. The
 // limit is the honest one for a process with no port table of its own, and the
-// host learns it while configuring, through the shutdown uart.c issues.
+// host learns it while configuring, through the shutdown port.c issues.
 //
 // There is no reset line to drive: a port's RESET_PORT (MUX_CMD_RESET_PORT) is
 // dropped in silence, because a tty has no modem lines behind it that reach the
@@ -57,11 +57,11 @@
 #include "command.h" // DECL_CONSTANT, MESSAGE_MAX
 #include "mux.h" // MUX_HEADER_BYTES
 #include "sched.h" // DECL_TASK, sched_add_timer, sched_check_wake
-#include "uart.h" // uart_backend_*
+#include "port.h" // port_backend_*
 
 // The tty this process serves as its bridge port, read from the environment
 // when the host declares the port. One name, because one port is served (see
-// uart_backend_open): the launcher that starts this process sets it.
+// port_backend_open): the launcher that starts this process sets it.
 #define LINUX_BRIDGE_PORT_ENV "KLIPPER_BRIDGE_PORT_0"
 
 // How often the port is polled once it is open, in microseconds.
@@ -75,8 +75,8 @@
 // read.
 #define LINUX_BRIDGE_POLL_US 1000
 
-// How many UART objects this backend can give the bridge: one, because the
-// whole backend is one static stream and uart_backend_open() refuses every slot
+// How many port objects this backend can give the bridge: one, because the
+// whole backend is one static stream and port_backend_open() refuses every slot
 // but 0. The count is the backend's fact - the same one it enforces - and the
 // host reads it back as BRIDGE_UART_COUNT to list the ports a bridge can be
 // given before it declares any (klipperx's `admin bridge config`).
@@ -88,7 +88,7 @@ DECL_CONSTANT("BRIDGE_UART_COUNT", 1);
 // (fd 0 would, if fd alone marked it).
 struct bridge_stream {
     int fd;                    // the tty, valid while the stream has an owner
-    struct uart_s *owner;      // the object that opened it; NULL = no stream
+    struct port_s *owner;      // the object that opened it; NULL = no stream
     int port;                  // the router's port index, -1 once open
     // The queued output: the router hands each unit over as one blob and this
     // holds it until the pty takes it, so a unit is written whole and a later
@@ -167,7 +167,7 @@ set_raw_mode(int fd, unsigned int baud)
 }
 
 // Open the tty this process serves as its bridge port. Called from config_uart
-// (src/uart.c) while the host is configuring, so a tty that is not there - or a
+// (src/port.c) while the host is configuring, so a tty that is not there - or a
 // path the launcher never named - fails the configuration rather than the
 // process coming up without its port.
 //
@@ -175,40 +175,40 @@ set_raw_mode(int fd, unsigned int baud)
 // port sections in, src/bridge.c bridge_add_port): this backend serves the
 // first one, and any other is refused, since there is one static stream behind
 // this call and no tty of its own for a second port.
-enum uart_open_result
-uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
+enum port_open_result
+port_backend_open(struct port_s *p, uint32_t rate, int slot)
 {
     if (slot != 0) {
         fprintf(stderr, "linux bridge serial: only port slot 0 is served,"
                 " not %d\n", slot);
-        return UART_OPEN_NO_DEVICE;
+        return PORT_OPEN_NO_DEVICE;
     }
     struct bridge_stream *s = &bridge_stream;
     // This stream already carries a port: refuse the second object rather than
     // hand both of them the same fd.
     if (s->owner)
-        return UART_OPEN_BUSY;
+        return PORT_OPEN_BUSY;
 
     const char *path = getenv(LINUX_BRIDGE_PORT_ENV);
     if (!path || !*path) {
         fprintf(stderr, "linux bridge serial: %s names no tty\n"
                 , LINUX_BRIDGE_PORT_ENV);
-        return UART_OPEN_NO_DEVICE;
+        return PORT_OPEN_NO_DEVICE;
     }
     int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         bridge_errno(path);
-        return UART_OPEN_NO_DEVICE;
+        return PORT_OPEN_NO_DEVICE;
     }
-    if (set_raw_mode(fd, baud) < 0) {
+    if (set_raw_mode(fd, rate) < 0) {
         close(fd);
-        return UART_OPEN_BAD_BAUD;
+        return PORT_OPEN_BAD_BAUD;
     }
     // Both steps succeeded, and only now does the stream become open - the
     // owner marks it open - while a failure above leaves it exactly as it was,
     // with no half-open state behind it.
     s->fd = fd;
-    s->owner = u;
+    s->owner = p;
     s->port = -1;
     s->tx_len = 0;
     // The port is read and its output flushed from the task loop, which sleeps
@@ -220,12 +220,12 @@ uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
         timer_read_time() + timer_from_us(LINUX_BRIDGE_POLL_US);
     sched_add_timer(&bridge_poll_timer);
     fprintf(stderr, "linux bridge serial: %s open at %u baud (fd %d, slot %d)\n"
-            , path, (unsigned int)baud, fd, slot);
-    return UART_OPEN_OK;
+            , path, (unsigned int)rate, fd, slot);
+    return PORT_OPEN_OK;
 }
 
 #if CONFIG_BRIDGE
-// The stream a router hook means: 'ctx' is the UART object the port carries
+// The stream a router hook means: 'ctx' is the port object the port carries
 // (bridge_add_port() stored it as the port's ctx), and that object opened this
 // backend's one stream, so the two agree exactly while it is open. NULL when
 // the hook's object is not the one that opened it - an object whose config_uart
@@ -285,22 +285,22 @@ static const struct bridge_port_ops bridge_serial_ops = {
     .reset = NULL,
 };
 
-// The router's ops for a UART object: one shared pair of hooks, because the
+// The router's ops for a port object: one shared pair of hooks, because the
 // hooks differ only by the stream they find, and there is one - 'ctx' (the
 // object, carried by bridge_add_port) is what bridge_stream_for() checks.
 const struct bridge_port_ops *
-uart_backend_port_ops(struct uart_s *u)
+port_backend_port_ops(struct port_s *p)
 {
-    (void)u;
+    (void)p;
     return &bridge_serial_ops;
 }
 
 // The router gave the object this port index; the poll below feeds the bytes it
 // reads from the stream under that port.
 void
-uart_backend_set_port(struct uart_s *u, int index)
+port_backend_set_port(struct port_s *p, int index)
 {
-    struct bridge_stream *s = bridge_stream_for(u);
+    struct bridge_stream *s = bridge_stream_for(p);
     // An object that reached config_bridge_port has an open stream (config_uart
     // opened it or shut the process down), so there is always a stream to
     // record; without one there is no fd to poll and nothing to record.

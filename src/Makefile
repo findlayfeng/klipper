@@ -7,9 +7,9 @@ src-y += sched.c command.c basecmd.c debugcmds.c
 src-$(CONFIG_MUX) += mux.c
 # Bridge: the router between the console's ports (BRIDGE).
 src-$(CONFIG_BRIDGE) += bridge.c
-# UART objects: the byte streams a host creates at configuration time and hands
-# to the bridge as ports (UART, the arch's backend is SERIAL_UART).
-src-$(CONFIG_UART) += uart.c
+# Port objects: the ports a host creates at configuration time and hands to the
+# bridge (UART, the arch's backend is SERIAL_UART).
+src-$(CONFIG_UART) += port.c
 # The bridge's CAN downstream port (BRIDGE_PORT_CAN): one CAN controller of this
 # build handed to the bridge as a port, the way a USART is (BRIDGE_PORT_SERIAL).
 src-$(CONFIG_BRIDGE_PORT_CAN) += generic/bridge_can.c

@@ -30,6 +30,11 @@ enum {
 // callbacks provided by board specific code
 int canhw_send(struct canbus_msg *msg);
 void canhw_set_filter(uint32_t id);
+// Set the rate of the bus this controller is on, in bits per second. Called at
+// power-up with the build's CAN rate, and again when a bridge CAN port is opened
+// for the rate its host picked (generic/bridge_can.c). Returns 0 on success, -1
+// when the driver cannot represent this rate for its clock.
+int canhw_set_rate(uint32_t bitrate);
 void canhw_get_status(struct canbus_status *status);
 // Add one more entry to the hardware receive filter, on top of the ids
 // canhw_set_filter() installs for this node.  arb and mask are an 11-bit

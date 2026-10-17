@@ -3,7 +3,7 @@
 // A bridge build has ports beside its console, and not all of them are USARTs
 // (stm32/bridge_serial.c): a CAN controller wired to a bus of downstream devices
 // is one port too, and this file is that backend. It answers the dispatcher's
-// seam (stm32/bridge_port.c, uart.h): bridge_can_open() takes the one controller
+// seam (stm32/bridge_port.c, port.h): bridge_can_open() takes the one controller
 // this build offers, bridge_can_port_ops() gives the router the hook that writes
 // a blob to the bus, bridge_can_set_port() records the router's port index, and
 // bridge_can_owns() tells the dispatcher which objects are this backend's - the
@@ -31,9 +31,11 @@
 //     nothing here may block or shut the build down over one unroutable blob.
 //
 // The rate is not a config_uart baud: a CAN bus runs at one rate for every device
-// on it, CONFIG_CANBUS_FREQUENCY, which canbus.c reports to the host
-// (DECL_CONSTANT "CANBUS_FREQUENCY"). config_uart's baud is therefore a dummy
-// parameter in this backend and is ignored on purpose.
+// on it, and which rate that is belongs to the port - config_can carries it
+// (src/port.c) and bridge_can_open() sets the controller to it before any filter
+// is armed. A bridge build reports no CANBUS_FREQUENCY of its own (canbus.c): the
+// port's rate is the answer, and a build-wide one would be a second, misleading
+// one.
 //
 // Listening: the devices behind this port answer on ids of their own, which the
 // bridge learns only when the host names the port - SET_PORT_NODEID, which reaches
@@ -75,11 +77,11 @@
 #include "board/irq.h" // irq_save, irq_restore
 #include "bridge.h" // bridge_port_input, struct bridge_port_ops
 #include "bridge_can.h" // bridge_can_open, bridge_can_process_data
-#include "canbus.h" // canhw_add_filter, canbus_send, struct canbus_msg
+#include "canbus.h" // canhw_set_rate, canhw_add_filter, canbus_send
 #include "command.h" // MESSAGE_MIN, MESSAGE_MAX, shutdown
 #include "mux.h" // mux_decode_header, mux_arb_id, MUX_TUNNEL_*
 #include "sched.h" // DECL_TASK, sched_wake_tasks
-#include "uart.h" // struct uart_s, enum uart_open_result
+#include "port.h" // struct port_s, enum port_open_result
 
 // The CAN slots this build offers, named for the host's `admin bridge config`: a
 // bridge's CAN ports come after every USART slot, and the host reserves a port's
@@ -154,7 +156,7 @@ static uint8_t bridge_can_handover[BRIDGE_CAN_NODE_BUF];
 // This build's one CAN controller as a port: the object that opened it, the
 // router's index for it, the id the host named the port with, and the queue.
 static struct {
-    struct uart_s *owner;
+    struct port_s *owner;
     // The router's port index, recorded one past itself, so 0 means "not handed
     // to the bridge yet" (the encoding bridge_serial.c uses too).
     int port;
@@ -495,19 +497,22 @@ DECL_TASK(bridge_can_task);
 
 
 /****************************************************************
- * The port's seam (uart.h, answered for this backend by bridge_port.c)
+ * The port's seam (port.h, answered for this backend by bridge_port.c)
  ****************************************************************/
 
-// Open this build's CAN controller for 'u'. The rate is CONFIG_CANBUS_FREQUENCY
-// (canbus.c reports it to the host), so 'baud' is a dummy parameter here - see
-// the note at the top of this file - and the controller takes one object.
-enum uart_open_result
-bridge_can_open(struct uart_s *u, uint32_t baud)
+// Open this build's CAN controller for 'p' at 'bitrate' bits per second. The rate
+// is the port's own, not the build's: the host picks it when it creates the port
+// (config_can), and the controller is set to it before the port's filters are
+// armed - a filter armed first would be a filter on a bus this controller has no
+// bit time for yet. The one controller takes one object.
+enum port_open_result
+bridge_can_open(struct port_s *p, uint32_t bitrate)
 {
-    (void)baud;
     if (bridge_can.owner)
-        return UART_OPEN_BUSY;
-    bridge_can.owner = u;
+        return PORT_OPEN_BUSY;
+    if (!bitrate || canhw_set_rate(bitrate) < 0)
+        return PORT_OPEN_BAD_BAUD;
+    bridge_can.owner = p;
     bridge_can.port = 0;
     bridge_can.node_id = 0;
     bridge_can.tx_head = bridge_can.tx_tail = 0;
@@ -533,13 +538,13 @@ bridge_can_open(struct uart_s *u, uint32_t baud)
     shutdown("bridge CAN port: cannot listen to the CAN admin answer"
              " (CONFIG_CANBUS_FILTER_MULTI is off)");
 #endif
-    return UART_OPEN_OK;
+    return PORT_OPEN_OK;
 }
 
 int
-bridge_can_owns(const struct uart_s *u)
+bridge_can_owns(const struct port_s *p)
 {
-    return u && bridge_can.owner == u;
+    return p && bridge_can.owner == p;
 }
 
 #if CONFIG_BRIDGE
@@ -671,9 +676,9 @@ static const struct bridge_port_ops bridge_can_ops = {
 };
 
 const struct bridge_port_ops *
-bridge_can_port_ops(struct uart_s *u)
+bridge_can_port_ops(struct port_s *p)
 {
-    (void)u;
+    (void)p;
     return &bridge_can_ops;
 }
 
@@ -681,9 +686,9 @@ bridge_can_port_ops(struct uart_s *u)
 // units it assembles under it. The index belongs to the object that opened the
 // controller.
 void
-bridge_can_set_port(struct uart_s *u, int index)
+bridge_can_set_port(struct port_s *p, int index)
 {
-    if (bridge_can.owner == u)
+    if (bridge_can.owner == p)
         bridge_can.port = index + 1;
 }
 #endif // CONFIG_BRIDGE

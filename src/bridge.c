@@ -59,8 +59,8 @@
 #include "host/klipper_host.h" // KLIPPER_HOST_PORT_SLOTS
 #endif
 
-// Downstream ports are the UART objects the host creates at configuration
-// time (uart.c hands each one here); the table is a small fixed array
+// Downstream ports are the port objects the host creates at configuration
+// time (port.c hands each one here); the table is a small fixed array
 // because nothing adds and removes ports at run time.
 #define BRIDGE_MAX_PORTS 4
 
