@@ -202,6 +202,8 @@ make test     # 自检：缓冲区边界（burst.c）
   `KLIPPER_HOST_PORT_SLOTS`，每槽独立 fd、整帧发送队列与 reset 状态机），**同槽**第二个端口
   对象才被拒（`PORT_OPEN_BUSY`）；slot 越界显式拒绝（不走路径回落）。
 - `port.c`   – 公共的**配置期端口对象**（`config_uart` / `config_can` / `config_bridge_port`）；后端 seam
-  `port_backend_open`/`port_backend_port_ops`/`port_backend_set_port`（`rate` 对 UART 是 baud、
-  对 CAN 是 bitrate），失败一律 `shutdown()`。
+  四个符号：`port_backend_open`（UART 口，按 `slot` 选 USART，速率是 baud）/
+  `port_backend_can_open`（CAN 口，**不看 slot**——一个控制器没有槽可选，速率是 bitrate）/
+  `port_backend_port_ops`/`port_backend_set_port`，失败一律 `shutdown()`。`config_can` 的线上参数里
+  仍带一个 `slot` 字段，后端**忽略**它（保留只是为了不改线格式）。
 - `klipper_host.h` / `internal.h` – 公开 API / 内部接口。
