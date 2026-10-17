@@ -44,12 +44,20 @@
 #include <unistd.h> // close
 #include "autoconf.h" // CONFIG_BRIDGE, CONFIG_HOST_BRIDGE_SERIAL_PATH
 #include "bridge.h" // bridge_add_port, bridge_port_input
-#include "command.h" // MESSAGE_MAX
+#include "command.h" // DECL_CONSTANT, MESSAGE_MAX
 #include "generic/misc.h" // timer_read_time, timer_is_before, timer_from_us
 #include "mux.h" // MUX_HEADER_BYTES
 #include "internal.h" // bridge_poll
 #include "klipper_host.h" // KLIPPER_HOST_PORT_SLOTS
 #include "uart.h" // uart_backend_*
+
+// How many UART objects this backend can give the bridge: one per port slot of
+// the host's table, because that table is what a slot's tty is named in
+// (klipper_host_port) and uart_backend_open() refuses any other slot. The count
+// is the backend's fact - the same table it enforces - and the host reads it
+// back as BRIDGE_UART_COUNT to list the ports a bridge can be given before it
+// declares any (klipperx's `admin bridge config`).
+DECL_CONSTANT("BRIDGE_UART_COUNT", KLIPPER_HOST_PORT_SLOTS);
 
 // One open stream per port slot: the table is exactly the host's port slot
 // table (KLIPPER_HOST_PORT_SLOTS, host/klipper_host.h). Static zero init gives

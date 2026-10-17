@@ -54,7 +54,7 @@
 #include "autoconf.h" // CONFIG_BRIDGE
 #include "board/misc.h" // timer_from_us, timer_read_time
 #include "bridge.h" // bridge_add_port, bridge_port_input
-#include "command.h" // MESSAGE_MAX
+#include "command.h" // DECL_CONSTANT, MESSAGE_MAX
 #include "mux.h" // MUX_HEADER_BYTES
 #include "sched.h" // DECL_TASK, sched_add_timer, sched_check_wake
 #include "uart.h" // uart_backend_*
@@ -74,6 +74,13 @@
 // and it is short enough that a device behind the port never waits on a stale
 // read.
 #define LINUX_BRIDGE_POLL_US 1000
+
+// How many UART objects this backend can give the bridge: one, because the
+// whole backend is one static stream and uart_backend_open() refuses every slot
+// but 0. The count is the backend's fact - the same one it enforces - and the
+// host reads it back as BRIDGE_UART_COUNT to list the ports a bridge can be
+// given before it declares any (klipperx's `admin bridge config`).
+DECL_CONSTANT("BRIDGE_UART_COUNT", 1);
 
 // The one stream this backend serves. Static zero init gives it no owner and no
 // fd, and 'owner' is what marks it open: it and 'fd' are written together, only
