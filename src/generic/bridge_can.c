@@ -7,7 +7,12 @@
 // this build offers, bridge_can_port_ops() gives the router the hook that writes
 // a blob to the bus, bridge_can_set_port() records the router's port index, and
 // bridge_can_owns() tells the dispatcher which objects are this backend's - the
-// CAN slots come after every UART slot.
+// CAN slots come after every UART slot. A slot's pins are what the host reads off
+// RESERVE_PINS_bridge_can (the way a USART backend's slots are read off
+// RESERVE_PINS_bridge_serial*, stm32/bridge_serial.c), and that declaration is the
+// arch's, not this file's: which pins a controller sits on is the arch's wiring,
+// and a pin has one owner, so the arch declares them under this name when the
+// build's CAN is a port (stm32/can.c, CONFIG_BRIDGE_PORT_CAN).
 //
 // The wire is CAN's, not a byte stream's. A blob the router hands over - a whole
 // mux unit, a legacy device's raw frame, or a tunnel's katapult block - is queued
@@ -82,13 +87,6 @@
 #include "mux.h" // mux_decode_header, mux_arb_id, MUX_TUNNEL_*
 #include "sched.h" // DECL_TASK, sched_wake_tasks
 #include "port.h" // struct port_s, enum port_open_result
-
-// The CAN slots this build offers, named for the host's `admin bridge config`: a
-// bridge's CAN ports come after every USART slot, and the host reserves a port's
-// pins for it by this name, the way it reserves a USART backend's
-// (stm32/bridge_serial.c, RESERVE_PINS_bridge_serial*). The pins are the ones the
-// CAN slot is wired to (CONFIG_STM32_BRIDGE_CAN_PB8_PB9: PB8 RX, PB9 TX).
-DECL_CONSTANT_STR("RESERVE_PINS_bridge_can", "PB8,PB9");
 
 // The katapult bootloader's node-id command: the same [uuid][nodeid] body the
 // application's MUX_CMD_SET_KLIPPER_NODEID carries, under the command byte

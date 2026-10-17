@@ -22,7 +22,16 @@
  #define GPIO_Tx GPIO('A', 12)
 #endif
 #if CONFIG_STM32_CANBUS_PB8_PB9
- DECL_CONSTANT_STR("RESERVE_PINS_CAN", "PB8,PB9");
+ // A bridge build's controller here is a downstream port, not a node
+ // (generic/bridge_can.c): the host names a port's pins for the port's own slot
+ // (`RESERVE_PINS_bridge_can`, the way RESERVE_PINS_bridge_serial* names a USART
+ // port's), and a pin has one owner - so the declarer is the arch, which is what
+ // knows the pins, and the name follows what this build uses them as.
+ #if CONFIG_BRIDGE_PORT_CAN
+  DECL_CONSTANT_STR("RESERVE_PINS_bridge_can", "PB8,PB9");
+ #else
+  DECL_CONSTANT_STR("RESERVE_PINS_CAN", "PB8,PB9");
+ #endif
  #define GPIO_Rx GPIO('B', 8)
  #define GPIO_Tx GPIO('B', 9)
 #endif
