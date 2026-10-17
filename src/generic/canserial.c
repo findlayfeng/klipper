@@ -240,7 +240,11 @@ can_process_set_klipper_nodeid(struct canbus_msg *msg)
 {
     if (msg->dlc < 8)
         return;
-    uint32_t newid = can_decode_nodeid(msg->data[7]);
+    // The wire byte is the **node id**; `CanData.assigned_id` is the arbitration
+    // id it maps to (`can_decode_nodeid`, the same value the filter is armed
+    // with). The two are different numbers, and the mux wants the node id.
+    uint32_t wire_id = msg->data[7];
+    uint32_t newid = can_decode_nodeid(wire_id);
     if (can_check_uuid(msg)) {
         if (newid != CanData.assigned_id) {
             CanData.assigned_id = newid;
@@ -249,8 +253,10 @@ can_process_set_klipper_nodeid(struct canbus_msg *msg)
             // The mux's device half is what parses the units above this stream
             // and what heads this device's own frames, so it needs the id too:
             // on CAN the assignment arrives as the bus's own admin frame, which
-            // this function is the only taker of.
-            mux_set_assigned(newid);
+            // this function is the only taker of. It takes a node id, not an
+            // arbitration id - handing it the arb made every frame this device
+            // sent carry a header for no address at all.
+            mux_set_assigned(wire_id);
 #endif
         }
     } else if (newid == CanData.assigned_id) {
