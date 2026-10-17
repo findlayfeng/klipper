@@ -637,12 +637,14 @@ bridge_can_admin_write(const uint8_t *frame, size_t frame_len)
         // rather than through the device's own byte stream
         // (generic/canserial.c can_process_request_bootloader, the same opcode).
         //
-        // Answers 0 on purpose: the unit still goes out below, which is what a
-        // mux device that *does* read units takes, and what a katapult ignores.
+        // The bus's own frame is the whole delivery, so the unit is not also
+        // shipped below. Sending both put the mux admin header back on the wire
+        // for a command the channel already spells, and a device that read the
+        // native frame acted on it twice.
         out[0] = MUX_CMD_REQUEST_BOOTLOADER;
         memcpy(&out[1], &kxid.args[2], MUX_UUID_LEN);
         bridge_can_tx_blob(MUX_ADMIN_LISTEN, out, 1 + MUX_UUID_LEN);
-        return 0;
+        return 1;
     }
     return 0;
 }
@@ -666,13 +668,13 @@ bridge_can_write(void *ctx, const uint8_t *data, size_t len)
                 // assignment): it went out as the single frame the CAN
                 // devices answer to.
                 return 0;
-            // An admin unit this channel has no frame for - the device
-            // commands 0x02 REQUEST_BOOTLOADER and 0x05 RESTART_DEVICE are the
-            // mux device's own. Those travel as units, header and all, on the
-            // address the device listens on: its mux reads the admin header
-            // and then runs the command itself. The header cannot be dropped
-            // here - without it the bytes are a data frame with an odd body,
-            // not an admin command.
+            // An admin unit this channel has no frame for - RESTART_DEVICE
+            // (0x05) has no CAN form. Such a command travels as the mux unit
+            // it is, header and all, on the address the device listens on: its
+            // mux reads the admin header and then runs the command itself. The
+            // admin header is the channel marker, not a data-path address, so
+            // this is the one shape the bus cannot carry natively; data itself
+            // never travels headed (see the unit branch below).
             if (!bridge_can.node_id) {
                 bridge_can.tx_unaddressed++;
                 return -1;
