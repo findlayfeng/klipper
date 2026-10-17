@@ -648,15 +648,27 @@ bridge_can_write(void *ctx, const uint8_t *data, size_t len)
         return 0;
     if (mux_decode_header(data, len, &arb, &consumed)
         == MUX_HEADER_COMPLETE) {
-        if (arb == MUX_ADMIN_LISTEN
-            && bridge_can_admin_write(data + consumed, len - consumed))
-            // An admin broadcast this channel spells (a scan, an assignment):
-            // it went out as the single frame the CAN devices answer to.
-            return 0;
+        if (arb == MUX_ADMIN_LISTEN) {
+            if (bridge_can_admin_write(data + consumed, len - consumed))
+                // An admin broadcast this channel spells (a scan, an
+                // assignment): it went out as the single frame the CAN
+                // devices answer to.
+                return 0;
+            // An admin unit this channel has no frame for - the device
+            // commands 0x02 REQUEST_BOOTLOADER and 0x05 RESTART_DEVICE are the
+            // mux device's own. Those travel as units, header and all, on the
+            // address the device listens on: its mux reads the admin header
+            // and then runs the command itself. The header cannot be dropped
+            // here - without it the bytes are a data frame with an odd body,
+            // not an admin command.
+            if (!bridge_can.node_id) {
+                bridge_can.tx_unaddressed++;
+                return -1;
+            }
+            return bridge_can_tx_blob(mux_arb_id(bridge_can.node_id), data, len);
+        }
         // A unit: its header is this port's framing, so the frame after it is
-        // what goes on the wire, under the address the header named. The
-        // device commands (0x02/0x05) arrive this way too: a mux device reads
-        // them in its stream, so they are never translated.
+        // what goes on the wire, under the address the header named.
         data += consumed;
         len -= consumed;
     } else if (bridge_can.node_id) {
