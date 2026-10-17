@@ -527,9 +527,9 @@ bridge_can_open(struct uart_s *u, uint32_t baud)
     if (canhw_add_filter(MUX_ADMIN_REPLY, 0x7FF) < 0)
         shutdown("bridge CAN port: no filter bank for the CAN admin answer");
 #else
-    // Without a spare bank the port cannot hear an unassigned device at all, so
-    // it cannot be scanned for or assigned: that is a configuration that reads
-    // as working and never does, so refuse it here.
+    // Without the capability the port cannot hear an unassigned device at all, so
+    // it cannot be scanned for or assigned either: a configuration that reads as
+    // working and never does, so refuse it here.
     shutdown("bridge CAN port: cannot listen to the CAN admin answer"
              " (CONFIG_CANBUS_FILTER_MULTI is off)");
 #endif
@@ -636,11 +636,12 @@ bridge_can_write(void *ctx, const uint8_t *data, size_t len)
         return 0;
     if (mux_decode_header(data, len, &arb, &consumed)
         == MUX_HEADER_COMPLETE) {
-        if (arb == MUX_ADMIN_LISTEN)
+        if (arb == MUX_ADMIN_LISTEN) {
             // An admin broadcast: this port's devices do not read the mux
             // framing at all, and the unit has to be translated before its
             // header is stripped (the body is a pseudo-frame, not a stream).
             return bridge_can_admin_write(data + consumed, len - consumed);
+        }
         // A unit: its header is this port's framing, so the frame after it is
         // what goes on the wire, under the address the header named.
         data += consumed;
