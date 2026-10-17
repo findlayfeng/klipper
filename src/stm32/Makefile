@@ -82,8 +82,8 @@ src-$(CONFIG_SERIAL) += $(serial-src-y) generic/serial_irq.c
 # between the router and the ports (src/Kconfig); the file is the port a board
 # hands to the bridge, the way host/bridge.c is the host library's.
 src-$(CONFIG_BRIDGE_PORT_SERIAL) += stm32/bridge_serial.c
-# The dispatcher that answers that seam (src/uart.h): it follows src/uart.c's own
-# gate, not one backend's, because uart.c needs the three seam symbols whenever
+# The dispatcher that answers that seam (src/port.h): it follows src/port.c's own
+# gate, not one backend's, because port.c needs the three seam symbols whenever
 # it is built - whichever backends this build puts behind them.
 src-$(CONFIG_UART) += stm32/bridge_port.c
 usb-src-$(CONFIG_HAVE_STM32_USBFS) := stm32/usbfs.c

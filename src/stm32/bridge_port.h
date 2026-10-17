@@ -3,11 +3,11 @@
 
 #include <stdint.h> // uint32_t
 #include "bridge.h" // struct bridge_port_ops
-#include "uart.h" // struct uart_s, enum uart_open_result
+#include "port.h" // struct port_s, enum port_open_result
 
-// The seam src/uart.c names (uart.h) belongs to the dispatcher: bridge_port.c
-// defines uart_backend_open(), uart_backend_port_ops() and
-// uart_backend_set_port(), and no backend does. A backend offers its ports
+// The seam src/port.c names (port.h) belongs to the dispatcher: bridge_port.c
+// defines port_backend_open(), port_backend_port_ops() and
+// port_backend_set_port(), and no backend does. A backend offers its ports
 // through the calls below, and the dispatcher decides which backend a slot
 // belongs to - the USART slots first, 0..bridge_serial_slot_count()-1, in the
 // order the backend's own table numbers them.
@@ -26,19 +26,19 @@ int bridge_serial_slot_count(void);
      + CONFIG_STM32_BRIDGE_SERIAL_USART3 + CONFIG_STM32_BRIDGE_SERIAL_UART4 \
      + CONFIG_STM32_BRIDGE_SERIAL_UART5)
 
-// Open the USART behind 'slot' at 'baud'.
-enum uart_open_result bridge_serial_open(struct uart_s *u, uint32_t baud,
+// Open the USART behind 'slot' at 'rate'.
+enum port_open_result bridge_serial_open(struct port_s *p, uint32_t rate,
                                          int slot);
 
-// The router's ops for 'u' as a downstream port.
-const struct bridge_port_ops *bridge_serial_port_ops(struct uart_s *u);
+// The router's ops for 'p' as a downstream port.
+const struct bridge_port_ops *bridge_serial_port_ops(struct port_s *p);
 
-// Whether 'u' is an object this backend opened. One build can carry more than one
+// Whether 'p' is an object this backend opened. One build can carry more than one
 // kind of port, so the dispatcher (bridge_port.c) asks each backend which objects
-// are its own before answering uart.h's hooks.
-int bridge_serial_owns(const struct uart_s *u);
+// are its own before answering port.h's hooks.
+int bridge_serial_owns(const struct port_s *p);
 
-// The bridge took 'u' as a downstream port with this index.
-void bridge_serial_set_port(struct uart_s *u, int index);
+// The bridge took 'p' as a downstream port with this index.
+void bridge_serial_set_port(struct port_s *p, int index);
 
 #endif // __STM32_BRIDGE_PORT_H

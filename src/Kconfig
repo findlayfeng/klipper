@@ -125,7 +125,7 @@ config SERIAL_BAUD
 # dependency loop, and either term implies MUX by itself.
 #
 # Which ports the bridge can be given is the arch's to say. BRIDGE_PORT_SERIAL
-# is that: this arch's UART objects (src/uart.c) can be handed to the bridge as
+# is that: this arch's port objects (src/port.c) can be handed to the bridge as
 # downstream ports; nothing opens a device on its own. The host names which
 # stream such an object carries, and at what rate, at configuration time.
 config MUX
@@ -203,7 +203,7 @@ config BRIDGE_PORT_CAN
     bool
     select UART
 
-# The byte-stream UART object layer (src/uart.c): an oid a host creates at
+# The port object layer (src/port.c): an oid a host creates at
 # configuration time, the line rate it asked for, and the seam an arch fills.
 config UART
     bool

@@ -4,7 +4,7 @@
 // downstream ports beside it; this file is the arch's USART backend for them:
 // the USARTs a board wires to the devices the host reaches through the bridge
 // (the port-level commands, and the flashing tunnel a katapult bootloader is
-// driven through). The arch's seam itself (uart.h) is the dispatcher's,
+// driven through). The arch's seam itself (port.h) is the dispatcher's,
 // bridge_port.c, which is where a slot is resolved to a backend; this file is
 // what that dispatcher calls for the USART slots: bridge_serial_open() brings a
 // port's USART up at the rate the host asks for in config_uart,
@@ -117,12 +117,12 @@ struct bridge_serial_port {
     uint8_t tx_buf[BUF_SIZE];
     volatile uint16_t tx_pos, tx_max;
 
-    // The UART object that opened the port (NULL until bridge_serial_open), and
+    // The port object that opened the port (NULL until bridge_serial_open), and
     // the router's index for it, recorded one past itself so that an untouched
     // port means "no index yet" - 0 is a real slot (the same encoding
     // bridge.c's bridge_id_port uses). The index is what received bytes are fed
     // under.
-    struct uart_s *owner;
+    struct port_s *owner;
     int port;
 };
 
@@ -343,26 +343,26 @@ DECL_TASK(bridge_serial_task);
 //
 // The line rate is the one the host asked for; which USART a slot is stays a
 // build-time fact (the table above), so the slot is looked up here.
-enum uart_open_result
-bridge_serial_open(struct uart_s *u, uint32_t baud, int slot)
+enum port_open_result
+bridge_serial_open(struct port_s *p, uint32_t rate, int slot)
 {
     if (slot < 0 || slot >= bridge_serial_slot_count())
-        return UART_OPEN_NO_DEVICE;
+        return PORT_OPEN_NO_DEVICE;
     const struct bridge_serial_hw *hw = bridge_serial_hw[slot];
     struct bridge_serial_port *port = hw->state;
     // One UART, one open: a second object on the same USART is refused rather
     // than sharing the register block with the first.
     if (port->owner)
-        return UART_OPEN_BUSY;
+        return PORT_OPEN_BUSY;
 
     // The BRR is a 16-bit divisor (12-bit mantissa, 4-bit fraction), so a rate
     // whose divisor does not fit is a rate this UART cannot be set to.
     USART_TypeDef *regs = hw->regs;
     enable_pclock((uint32_t)regs);
     uint32_t pclk = get_pclock_frequency((uint32_t)regs);
-    uint32_t div = DIV_ROUND_CLOSEST(pclk, baud);
+    uint32_t div = DIV_ROUND_CLOSEST(pclk, rate);
     if (!div || div > 0xffff)
-        return UART_OPEN_BAD_BAUD;
+        return PORT_OPEN_BAD_BAUD;
 
     port->rx_head = port->rx_tail = 0;
     port->tx_pos = port->tx_max = 0;
@@ -376,8 +376,8 @@ bridge_serial_open(struct uart_s *u, uint32_t baud, int slot)
 
     // Both the clock and the pins are up, and only now does the slot have an
     // owner; an earlier failure leaves it exactly as it was.
-    port->owner = u;
-    return UART_OPEN_OK;
+    port->owner = p;
+    return PORT_OPEN_OK;
 }
 
 #if CONFIG_BRIDGE
@@ -444,28 +444,28 @@ static const struct bridge_port_ops bridge_serial_ops = {
 // blob goes to is the object the router hands back as the ctx (checked against
 // the owner in the hook), so there is nothing per-object to return here.
 const struct bridge_port_ops *
-bridge_serial_port_ops(struct uart_s *u)
+bridge_serial_port_ops(struct port_s *p)
 {
-    (void)u;
+    (void)p;
     return &bridge_serial_ops;
 }
 
-// Whether 'u' opened one of this backend's USARTs. A bridge build can carry more
+// Whether 'p' opened one of this backend's USARTs. A bridge build can carry more
 // than one kind of port (a CAN port beside these), so the dispatcher asks here
 // before handing an object the USART ops.
 int
-bridge_serial_owns(const struct uart_s *u)
+bridge_serial_owns(const struct port_s *p)
 {
-    return bridge_serial_hw_of(u) != NULL;
+    return bridge_serial_hw_of(p) != NULL;
 }
 
-// The router took this UART as the port with this index; the task feeds the
+// The router took this port as the port with this index; the task feeds the
 // bytes it reads under it. The index belongs to the port the object opened, and
 // it is recorded before the host can send anything to the port.
 void
-bridge_serial_set_port(struct uart_s *u, int index)
+bridge_serial_set_port(struct port_s *p, int index)
 {
-    const struct bridge_serial_hw *hw = bridge_serial_hw_of(u);
+    const struct bridge_serial_hw *hw = bridge_serial_hw_of(p);
     if (hw)
         hw->state->port = index + 1;
 }

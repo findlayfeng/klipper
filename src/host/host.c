@@ -150,7 +150,7 @@ klipper_host_init(void)
 #endif
 
     // Bridge mode takes its downstream ports from the host's configuration
-    // (config_uart / config_bridge_port, src/uart.c), so init opens nothing and
+    // (config_uart / config_bridge_port, src/port.c), so init opens nothing and
     // nothing here can fail on a tty that is not there: a port that cannot be
     // brought up fails the configuration instead.
     g_initialised = 1;

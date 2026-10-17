@@ -4,7 +4,7 @@
 // is CONFIG_BRIDGE and the device half CONFIG_MUX, both transport-neutral (see
 // src/Kconfig); this file is the arch backend that gives a bridge its streams on
 // the host library (CONFIG_BRIDGE_PORT_SERIAL): it opens the tty the host named
-// for that port when the host creates a UART object (config_uart, src/uart.c),
+// for that port when the host creates a port object (config_uart, src/port.c),
 // puts it in the raw mode the protocol needs, registers it as a downstream
 // port, and polls it from the task loop's sleep (bridge_poll, called by
 // irq_wait) so its bytes reach the router next to the console's other work
@@ -17,16 +17,16 @@
 // instead of leaving a bridge that comes up without its port.
 //
 // Which tty a port is on is the host's to say at run time: it names one per port
-// with klipper_host_port() before klipper comes up (host.c), and the UART object
+// with klipper_host_port() before klipper comes up (host.c), and the port object
 // carries the port's slot, so the stream opened here is the one that port was
 // named. A slot the host never named falls back to CONFIG_HOST_BRIDGE_SERIAL_PATH,
 // the path a plain bridge build opens.
 //
-// This backend serves one stream per port slot: every UART object the host
+// This backend serves one stream per port slot: every port object the host
 // creates opens its own slot's tty and keeps its own output queue and reset
 // pulse beside it, so up to KLIPPER_HOST_PORT_SLOTS of them are live at once.
-// A second UART object on a slot that is already open is refused
-// (UART_OPEN_BUSY) rather than silently sharing the fd. Which tty a port is on
+// A second port object on a slot that is already open is refused
+// (PORT_OPEN_BUSY) rather than silently sharing the fd. Which tty a port is on
 // is not a serial parameter; the rate is the parameter, and it arrives with
 // config_uart.
 //
@@ -49,11 +49,11 @@
 #include "mux.h" // MUX_HEADER_BYTES
 #include "internal.h" // bridge_poll
 #include "klipper_host.h" // KLIPPER_HOST_PORT_SLOTS
-#include "uart.h" // uart_backend_*
+#include "port.h" // port_backend_*
 
-// How many UART objects this backend can give the bridge: one per port slot of
+// How many port objects this backend can give the bridge: one per port slot of
 // the host's table, because that table is what a slot's tty is named in
-// (klipper_host_port) and uart_backend_open() refuses any other slot. The count
+// (klipper_host_port) and port_backend_open() refuses any other slot. The count
 // is the backend's fact - the same table it enforces - and the host reads it
 // back as BRIDGE_UART_COUNT to list the ports a bridge can be given before it
 // declares any (klipperx's `admin bridge config`).
@@ -68,14 +68,14 @@ DECL_CONSTANT("BRIDGE_UART_COUNT", KLIPPER_HOST_PORT_SLOTS);
 // open is refused rather than sharing the fd, while different slots open
 // independently and are live together.
 //
-// The router's hooks reach a slot through the UART object that opened it
+// The router's hooks reach a slot through the port object that opened it
 // ('owner'): bridge_add_port() hands that object to the router as the port's
 // ctx, and it is what write()/reset() carry back. 'port' is the index the
 // router gave that object, so bytes read from this fd are fed to
 // bridge_port_input() under the right port.
 struct bridge_stream {
     int fd;                    // the tty, valid while the slot has an owner
-    struct uart_s *owner;      // the object that opened it; NULL = no stream
+    struct port_s *owner;      // the object that opened it; NULL = no stream
     int port;                  // the router's port index, -1 once open (a slot
                                // no object opened is guarded by its NULL owner)
     // The queued output: the router hands each unit over as one blob and this
@@ -140,15 +140,15 @@ set_raw_mode(int fd, unsigned int baud)
     return 0;
 }
 
-// Open the tty the UART object's port is on. Called from config_uart (src/uart.c)
+// Open the tty the port object sits on. Called from config_uart (src/port.c)
 // while the host is configuring, so a tty that is not there fails the
 // configuration rather than the library coming up without its port.
 //
 // 'slot' is the port's index on the bridge, which is the number the host named
 // its tty with (klipper_host_port, host.c); a slot it never named opens the path
 // this build was configured with.
-enum uart_open_result
-uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
+enum port_open_result
+port_backend_open(struct port_s *p, uint32_t rate, int slot)
 {
     // The slot is where this object lives on the backend. A slot outside the
     // host's table could never be named a tty (klipper_host_port refuses it),
@@ -157,14 +157,14 @@ uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
     if (slot < 0 || slot >= KLIPPER_HOST_PORT_SLOTS) {
         fprintf(stderr, "bridge serial: slot %d is outside 0..%d\n", slot,
                 KLIPPER_HOST_PORT_SLOTS - 1);
-        return UART_OPEN_NO_DEVICE;
+        return PORT_OPEN_NO_DEVICE;
     }
     struct bridge_stream *s = &bridge_streams[slot];
     // This slot already carries a stream: refuse the second object rather than
     // hand both of them the same fd. Other slots are unaffected and open on
     // their own.
     if (s->owner)
-        return UART_OPEN_BUSY;
+        return PORT_OPEN_BUSY;
 
     const char *path = klipper_host_port_path(slot);
     if (!path)
@@ -172,27 +172,27 @@ uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
     int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         bridge_errno(path);
-        return UART_OPEN_NO_DEVICE;
+        return PORT_OPEN_NO_DEVICE;
     }
-    if (set_raw_mode(fd, baud) < 0) {
+    if (set_raw_mode(fd, rate) < 0) {
         close(fd);
-        return UART_OPEN_BAD_BAUD;
+        return PORT_OPEN_BAD_BAUD;
     }
     // Both steps succeeded, and only now does the slot become open - the owner
     // marks it open - while a failure above leaves the slot exactly as it was,
     // with no half-open state behind it.
     s->fd = fd;
-    s->owner = u;
+    s->owner = p;
     s->port = -1;
     s->tx_len = 0;
     s->reset_active = 0;
     fprintf(stderr, "bridge serial: %s open at %u baud (fd %d, slot %d)\n",
-            path, (unsigned int)baud, fd, slot);
-    return UART_OPEN_OK;
+            path, (unsigned int)rate, fd, slot);
+    return PORT_OPEN_OK;
 }
 
 #if CONFIG_BRIDGE
-// The stream a router hook means: 'ctx' is the UART object the port carries
+// The stream a router hook means: 'ctx' is the port object the port carries
 // (bridge_add_port() stored it as the port's ctx), and that object opened
 // exactly one slot, so the table answers which stream the hook drives. NULL
 // when no open slot carries it - an object whose config_uart failed never gets
@@ -200,12 +200,12 @@ uart_backend_open(struct uart_s *u, uint32_t baud, int slot)
 static struct bridge_stream *
 bridge_stream_for(void *ctx)
 {
-    struct uart_s *u = ctx;
+    struct port_s *p = ctx;
     int i;
-    if (!u)
+    if (!p)
         return NULL;
     for (i = 0; i < KLIPPER_HOST_PORT_SLOTS; i++)
-        if (bridge_streams[i].owner == u)
+        if (bridge_streams[i].owner == p)
             return &bridge_streams[i];
     return NULL;
 }
@@ -319,13 +319,13 @@ static const struct bridge_port_ops bridge_serial_ops = {
     .reset = bridge_port_reset,
 };
 
-// The router's ops for a UART object: one shared pair of hooks for every port,
+// The router's ops for a port object: one shared pair of hooks for every port,
 // because the hooks differ only by the stream they find - 'ctx' (the object,
 // carried by bridge_add_port) selects its slot in the table above.
 const struct bridge_port_ops *
-uart_backend_port_ops(struct uart_s *u)
+port_backend_port_ops(struct port_s *p)
 {
-    (void)u;
+    (void)p;
     return &bridge_serial_ops;
 }
 
@@ -333,9 +333,9 @@ uart_backend_port_ops(struct uart_s *u)
 // reads from that object's slot under that port. Each open slot records its own
 // index, so the ports never overwrite each other's.
 void
-uart_backend_set_port(struct uart_s *u, int index)
+port_backend_set_port(struct port_s *p, int index)
 {
-    struct bridge_stream *s = bridge_stream_for(u);
+    struct bridge_stream *s = bridge_stream_for(p);
     // An object that reached config_bridge_port has an open slot (config_uart
     // opened it or shut the device down), so there is always a stream to
     // record; without one there is no fd to poll and nothing to record.
