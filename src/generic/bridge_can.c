@@ -107,6 +107,15 @@ struct bridge_can_node {
 
 static struct bridge_can_node bridge_can_nodes[BRIDGE_CAN_NODE_MAX];
 
+// The bytes a task is handing to the router, one node's worth at a time. The
+// router's entry (bridge_port_input) is not a copy: it scans the piece into the
+// port's buffer, routes it, and may write another port - work that must not run
+// inside an interrupts-off section. So the task copies the whole pieces out of
+// the node's buffer under irq_save, hands the node's space back to the
+// interrupt, and only then calls the router with the copy. Written by the task
+// alone; the interrupt never touches it.
+static uint8_t bridge_can_handover[BRIDGE_CAN_NODE_BUF];
+
 // This build's one CAN controller as a port: the object that opened it, the
 // router's index for it, the id the host named the port with, and the queue.
 static struct {
@@ -362,13 +371,16 @@ bridge_can_task(void)
         struct bridge_can_node *n = &bridge_can_nodes[i];
         if (!n->node_id || !n->ready)
             continue;
+        // Take the whole pieces out and give the node's space back to the
+        // interrupt; the router is called with the copy, outside the lock.
         irqstatus_t flag = irq_save();
         uint16_t ready = n->ready;
-        bridge_port_input(index, n->buf, ready);
+        memcpy(bridge_can_handover, n->buf, ready);
         memmove(n->buf, &n->buf[ready], n->len - ready);
         n->len -= ready;
         n->ready = 0;
         irq_restore(flag);
+        bridge_port_input(index, bridge_can_handover, ready);
     }
 }
 DECL_TASK(bridge_can_task);
