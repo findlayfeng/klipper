@@ -31,6 +31,14 @@ enum {
 int canhw_send(struct canbus_msg *msg);
 void canhw_set_filter(uint32_t id);
 void canhw_get_status(struct canbus_status *status);
+// Add one more entry to the hardware receive filter, on top of the ids
+// canhw_set_filter() installs for this node.  arb and mask are an 11-bit
+// standard arbitration id and its "must match" bits (a set mask bit means the
+// corresponding arb bit must be equal).  Returns 0 on success, -1 if no filter
+// is left or the driver cannot add filters.  Only called from a
+// CONFIG_CANBUS_FILTER_MULTI build, and only implemented by a driver whose
+// architecture selects that option.
+int canhw_add_filter(uint32_t arb, uint32_t mask);
 
 // canbus.c
 int canbus_send(struct canbus_msg *msg);

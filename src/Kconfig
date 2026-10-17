@@ -438,6 +438,19 @@ config CANBUS_FREQUENCY
 config CANBUS_FILTER
     bool
     default y if CANSERIAL
+config CANBUS_FILTER_MULTI
+    bool
+    help
+        An architecture's CAN driver can add arbitration ids other than this
+        node's own ids to the hardware receive filter set (the bridge's CAN
+        downstream port has to hear the downstream nodes, which answer to
+        their own ids). This is the capability flag only - a caller uses it
+        with src/generic/canbus.h's canhw_add_filter() and must fall back to
+        shutdown() outside the #if CONFIG_CANBUS_FILTER_MULTI block on an
+        architecture that does not select this.
+
+        Architectures without the capability do not select it, so builds for
+        them are unaffected.
 
 # Stepper optimizations
 config INLINE_STEPPER_HACK

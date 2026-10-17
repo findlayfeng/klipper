@@ -131,6 +131,84 @@ canhw_send(struct canbus_msg *msg)
     return CANMSG_DATA_LEN(msg);
 }
 
+// The three filter banks canhw_set_filter() owns; extra filters use the banks
+// above them.
+#define CANHW_FILTER_BANKS 3
+
+#if CONFIG_CANBUS_FILTER_MULTI
+// Extra receive ids added through canhw_add_filter(), kept in a table because
+// canhw_set_filter() clears FA1R on every id change and has to install them
+// again.  The limit is the number of spare bxCAN filter banks a build can have
+// (14 banks, 3 taken by the node's own ids), rounded down to a small number so
+// a bridge port cannot swallow the whole filter set.
+#define CANHW_EXTRA_FILTERS 8
+
+static struct {
+    uint32_t arb, mask;
+} CAN_Extra_Filters[CANHW_EXTRA_FILTERS];
+static int CAN_Extra_Filter_Count;
+#endif
+
+// Write the extra filters into the spare filter banks.  The caller must be in
+// filter initialisation mode with FA1R cleared, so both the bank content and
+// the activation bit are (re)written here.
+static void
+canhw_set_extra_filters(CAN_TypeDef *fcan)
+{
+#if CONFIG_CANBUS_FILTER_MULTI
+    int i;
+    for (i = 0; i < CAN_Extra_Filter_Count; i++) {
+        uint32_t bank = CANHW_FILTER_BANKS + i;
+        // A bank must be deactivated while its registers are written
+        fcan->FA1R &= ~(1 << bank);
+        fcan->FS1R |= 1 << bank;
+        fcan->sFilterRegister[bank].FR1 =
+            CAN_Extra_Filters[i].arb << CAN_RI0R_STID_Pos;
+        fcan->sFilterRegister[bank].FR2 =
+            (CAN_Extra_Filters[i].mask << CAN_RI0R_STID_Pos)
+            | CAN_TI0R_IDE | CAN_TI0R_RTR;
+        fcan->FA1R |= 1 << bank;
+    }
+#else
+    (void)fcan;
+#endif
+}
+
+#if CONFIG_CANBUS_FILTER_MULTI
+// Add an arbitration id to the hardware receive filter (see canbus.h)
+int
+canhw_add_filter(uint32_t arb, uint32_t mask)
+{
+    irqstatus_t flag = irq_save();
+    int i;
+    for (i = 0; i < CAN_Extra_Filter_Count; i++)
+        if (CAN_Extra_Filters[i].arb == arb
+            && CAN_Extra_Filters[i].mask == mask) {
+            // Already in the filter - idempotent, takes no extra bank
+            irq_restore(flag);
+            return 0;
+        }
+    if (CAN_Extra_Filter_Count >= CANHW_EXTRA_FILTERS) {
+        irq_restore(flag);
+        return -1;
+    }
+    CAN_Extra_Filters[CAN_Extra_Filter_Count].arb = arb;
+    CAN_Extra_Filters[CAN_Extra_Filter_Count].mask = mask;
+    CAN_Extra_Filter_Count++;
+
+    CAN_TypeDef *fcan = FILTER_CAN;
+    uint32_t fmr = fcan->FMR;
+    if (FILTER_CAN != SOC_CAN)
+        // Using CAN2 with filter on CAN1 - assign CAN2 to first filter
+        fmr &= ~CAN_FMR_CAN2SB;
+    fcan->FMR = fmr | CAN_FMR_FINIT;
+    canhw_set_extra_filters(fcan);
+    fcan->FMR = fmr & ~CAN_FMR_FINIT;
+    irq_restore(flag);
+    return 0;
+}
+#endif
+
 // Setup the receive packet filter
 void
 canhw_set_filter(uint32_t id)
@@ -164,6 +242,9 @@ canhw_set_filter(uint32_t id)
 
     /* Filter activation */
     fcan->FA1R = (1<<0) | (id ? (1<<1) | (1<<2) : 0);
+    /* FA1R was cleared above, so the extra filters have to be written and
+       activated again or a node id change would silently drop them */
+    canhw_set_extra_filters(fcan);
     /* Leave the initialisation mode for the filter */
     fcan->FMR = fmr & ~CAN_FMR_FINIT;
 }
