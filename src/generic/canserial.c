@@ -245,6 +245,13 @@ can_process_set_klipper_nodeid(struct canbus_msg *msg)
         if (newid != CanData.assigned_id) {
             CanData.assigned_id = newid;
             canbus_set_filter(CanData.assigned_id);
+#if CONFIG_MUX_CAN
+            // The mux's device half is what parses the units above this stream
+            // and what heads this device's own frames, so it needs the id too:
+            // on CAN the assignment arrives as the bus's own admin frame, which
+            // this function is the only taker of.
+            mux_set_assigned(newid);
+#endif
         }
     } else if (newid == CanData.assigned_id) {
         can_id_conflict();

@@ -390,6 +390,15 @@ mux_node_id(void)
     return mux_assigned;
 }
 
+// Adopt a node id another layer already accepted (generic/canserial.c's admin
+// frame is where a CAN build hears one). The device half answers, heads and
+// routes by this value, so it has to be the same number.
+void
+mux_set_assigned(uint32_t nodeid)
+{
+    mux_assigned = nodeid;
+}
+
 // What our own frames go out with.
 uint_fast8_t
 mux_out_header(uint8_t *buf)

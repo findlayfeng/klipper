@@ -225,6 +225,11 @@ uint_fast8_t mux_assignment_reply(uint8_t *buf, uint_fast8_t buf_size
 void mux_set_uuid(const uint8_t *uuid);
 const uint8_t *mux_uuid(void);
 uint32_t mux_node_id(void);
+// Hand the device half the node id another layer adopted. A CAN build hears its
+// id on the bus's own admin frame, so the CAN layer is the one that adopts it
+// there; without this the device's own frames would go out unheaded (no unit
+// framing) and units addressed to it would be turned away.
+void mux_set_assigned(uint32_t nodeid);
 
 // The header our own frames go out with: 0 bytes while the device has no node
 // id (raw frames, exactly the old wire format), else the reply header naming us.
