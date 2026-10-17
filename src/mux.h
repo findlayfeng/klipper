@@ -74,9 +74,16 @@ int mux_is_reply_arb(uint32_t arb);
 //
 // and one response:
 //
-//   0x20 NEED_NODEID        [uuid][app?]        an unassigned device's answer
+//   0x20 NEED_NODEID        [uuid][app?][path?] an unassigned device's answer
 //                                               to a scan
 //
+// The two optional fields of the answer are told apart by the top bit of the
+// byte that starts each (MUX_PATH_FLAG): clear, it is the application byte;
+// set, it is the port path - the port of each bridge the answer came through,
+// appended there and in that order, innermost first. A device answered
+// directly sends no path at all, which is the shape the answer had before the
+// path existed.
+
 // 0x02 and 0x05 name a device (routed by the bridge the same way, executed by
 // the device); 0x03, 0x04 and 0x06 name the bridge itself and never travel
 // downstream. The five (0x02, 0x03, 0x04, 0x05, 0x06) are addressed by the port
@@ -126,6 +133,18 @@ int mux_is_reply_arb(uint32_t arb);
 // the port's flashing tunnel mode (MUX_CMD_SET_PORT_TUNNEL), which is a
 // separate bit of port state and legal on either kind of port.
 #define MUX_PORT_UNITS 0x01
+
+// The top bit of the byte after an answer's uuid: set, that byte is the head of
+// the answer's port path (its low bits are how many port numbers follow) rather
+// than the application byte, which never has the bit set.
+#define MUX_PATH_FLAG 0x80
+
+// How many port numbers an answer's path may carry. A device is at most this
+// many bridges deep in any real wiring, and the bound is what keeps the path a
+// fixed part of a frame: a path already this long is dropped rather than grown
+// (mux_need_nodeid_via), so a device behind that many bridges is reported no
+// deeper than the bridge nearest the host.
+#define MUX_PATH_MAX 8
 
 // A uuid is six bytes, most significant first.
 #define MUX_UUID_LEN 6
@@ -193,6 +212,9 @@ uint_fast8_t mux_set_node_id(uint8_t *buf, uint_fast8_t buf_size
                              , const uint8_t *uuid, uint32_t nodeid);
 uint_fast8_t mux_need_nodeid(uint8_t *buf, uint_fast8_t buf_size
                              , const uint8_t *uuid, int with_app, uint8_t app);
+uint_fast8_t mux_need_nodeid_via(uint8_t *buf, uint_fast8_t buf_size
+                                 , const uint8_t *args, uint_fast8_t args_len
+                                 , uint8_t port);
 uint_fast8_t mux_assignment_reply(uint8_t *buf, uint_fast8_t buf_size
                                   , uint32_t nodeid);
 
