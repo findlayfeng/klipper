@@ -602,6 +602,7 @@ config STM32_BRIDGE_SERIAL_UART5
 config STM32_BRIDGE_CAN_PB8_PB9
     bool "Bridge CAN downstream port (PB8/PB9)"
     depends on HAVE_STM32_CANBUS
+    depends on !(MACH_STM32F1 && USBSERIAL)
     select CANBUS
     select CANBUS_FILTER_MULTI
     select BRIDGE_PORT_CAN
@@ -613,6 +614,18 @@ config STM32_BRIDGE_CAN_PB8_PB9
         and comes after every USART port in the slot numbering. Its CAN rate is
         the build's CAN bus speed (CANBUS_FREQUENCY), not the baud the host asks
         for: a CAN bus runs at one rate for everything on it.
+
+        This selects CANBUS only - the driver and the wrapper that hands its
+        frames on (generic/canbus.c) - and never CANSERIAL or MUX_CAN: this
+        firmware is not a node on that bus, the CAN controller is a port of the
+        bridge, and the bridge does the routing. CANBUS_FILTER_MULTI is what
+        lets the port hear the ids of the devices the host names behind it.
+
+        On the F1 the USB peripheral and CAN1 RX0 share interrupt vector 20
+        (USB_LP_CAN1_RX0_IRQn), so an F1 bridge takes its console on a USART
+        when it also carries a CAN port - which is why the option cannot be
+        combined with USBSERIAL there (upstream keeps the same rule for
+        USBCANBUS: HAVE_STM32_USBCANBUS depends on !MACH_STM32F1).
 
         Off by default: this is a bridge build's port wiring, for a board with a
         CAN transceiver wired to these pins.
