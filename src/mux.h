@@ -110,7 +110,9 @@ int mux_is_reply_arb(uint32_t arb);
 // and leaves it, so a repeat simply flips back. In tunnel mode the port's
 // downstream units lose their headers (the raw katapult blocks go down whole)
 // and the bytes coming up are reassembled into tunnel units under the port's
-// reply id. Like SET_PORT_NODEID it is the bridge's own port state: consumed by
+// reply id - the id its SET_PORT_NODEID named it with, whichever flags that
+// command gave it: the mode is about the line, not about what the device on it
+// speaks. Like SET_PORT_NODEID it is the bridge's own port state: consumed by
 // the bridge, never forwarded, no receipt; a port the table does not list is
 // dropped in silence.
 #define MUX_SET_PORT_TUNNEL_LEN 2
@@ -120,7 +122,9 @@ int mux_is_reply_arb(uint32_t arb);
 // strips the header off a unit going down and heads a raw frame coming up with
 // the reply id it was given - the wire format of a device that predates the
 // mux. Whether a port's device speaks units is the host's call, not a build
-// time one: nothing here is compiled in per port.
+// time one: nothing here is compiled in per port. The flags say nothing about
+// the port's flashing tunnel mode (MUX_CMD_SET_PORT_TUNNEL), which is a
+// separate bit of port state and legal on either kind of port.
 #define MUX_PORT_UNITS 0x01
 
 // A uuid is six bytes, most significant first.

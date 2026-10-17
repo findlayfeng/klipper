@@ -40,10 +40,11 @@
 // is what keeps the wire format of a device that predates the mux working.
 //
 // A port the host has put in flashing tunnel mode (SET_PORT_TUNNEL, mux.h) is
-// that same strip/head rule with no unit layer at all: what is on the line is a
-// bootloader's raw katapult stream, so a block the host wrapped in a unit goes
-// down bare and the blocks read from the line go up whole under the port's
-// reply id (mux.h MUX_TUNNEL_* is the shared contract).
+// that same strip/head rule with no unit layer at all, whatever flags the port
+// was named with: what is on the line is a bootloader's raw katapult stream, so
+// a block the host wrapped in a unit goes down bare and the blocks read from
+// the line go up whole under the port's reply id (mux.h MUX_TUNNEL_* is the
+// shared contract).
 //
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
 //
@@ -93,8 +94,12 @@ struct bridge_port {
     // Cleared at registration; the host sets them per port with the port-level
     // SET_PORT_NODEID.
     uint8_t flags;
-    // The node id of the device on a legacy port: a raw frame it sends is
-    // forwarded upstream under this id's reply header. 0 until assigned.
+    // The port's own node id: the id the host named the port with (the
+    // port-level SET_PORT_NODEID) or, on a legacy port, which speaks for the
+    // one device behind it, the last id an assignment gave that device. It is
+    // what the port's non-unit wire is headed with going up: a legacy port's
+    // raw frames and, in flashing tunnel mode, the katapult blocks read from
+    // the line - the port's flags are not part of that rule. 0 until assigned.
     uint32_t node_id;
     // Flashing tunnel mode (SET_PORT_TUNNEL, mux.h): while set, a unit routed
     // down to this port is stripped of its header - the raw bytes go out as
@@ -173,7 +178,8 @@ bridge_map_id(uint32_t nodeid, int port)
     bridge_id_port[nodeid] = port + 1;
     if (!(bridge_ports[port].flags & MUX_PORT_UNITS))
         // A legacy port speaks for the one device behind it, so the id is also
-        // what its raw frames are headed with on the way up.
+        // what its raw frames are headed with on the way up. (An explicit port
+        // name records the id on either kind of port - bridge_set_port_nodeid.)
         bridge_ports[port].node_id = nodeid;
 }
 
@@ -229,6 +235,13 @@ bridge_set_port_nodeid(const uint8_t *args, uint_fast8_t args_len)
     if (!mux_arb_id(nodeid))
         return;
     bridge_ports[index].flags = flags & MUX_PORT_UNITS;
+    // The name is the port's own, whatever flags it carries: a legacy port
+    // heads its raw frames up with it and, in flashing tunnel mode, its
+    // katapult blocks. What the device behind the port speaks does not enter
+    // into it - the bootloader a tunnel reaches answers no scan and speaks no
+    // units, so on a units-named port this name is the only address the tunnel
+    // can be headed with.
+    bridge_ports[index].node_id = nodeid;
     bridge_map_id(nodeid, index);
 }
 
@@ -357,7 +370,10 @@ bridge_port_raw_up(struct bridge_port *p, uint_fast8_t frame_len)
 // Whole katapult blocks read from a tunnel-mode port, sent up one block to a
 // unit under the port's own reply id - the id the host named the port with
 // (SET_PORT_NODEID), the same address a legacy port's raw frames are headed
-// with. Without one there is no address to send them under, so they are
+// with. A port's flags do not enter into it: the tunnel is also turned on a
+// port named to speak units (the host names its target, then enters the
+// bootloader behind it), and the stream read there is a raw one either way.
+// Without an id there is no address to send the blocks under, so they are
 // dropped, the rule `bridge_port_raw_up` follows too.
 static void
 bridge_port_tunnel_up(struct bridge_port *p, size_t frame_len)
