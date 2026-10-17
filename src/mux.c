@@ -293,6 +293,57 @@ mux_need_nodeid(uint8_t *buf, uint_fast8_t buf_size
                          , payload, args_len);
 }
 
+// The same answer as `mux_kxid_unit` builds for its device, but travelled: the
+// payload a downstream port answered with, with `port` - this bridge's port
+// index - appended to its port path, framed again as one whole unit.
+//
+// `args` is a NEED_NODEID payload as it arrived from below, `[0x20][uuid]
+// [app?][path?]`: the application byte and the path are both optional and each
+// is recognised by the top bit of the byte that starts it, so the path this
+// bridge appends goes after whatever was there. A path already `MUX_PATH_MAX`
+// long, or one that does not parse (a count of zero, a count the payload does
+// not carry), is dropped rather than grown or half-kept: the answer then says
+// no more than "behind this bridge's port `port`", which is true whatever the
+// broken field was.
+//
+// 0 when `args` is not an answer, or the unit does not fit `buf_size`.
+uint_fast8_t
+mux_need_nodeid_via(uint8_t *buf, uint_fast8_t buf_size
+                    , const uint8_t *args, uint_fast8_t args_len
+                    , uint8_t port)
+{
+    uint8_t payload[1 + MUX_UUID_LEN + 1 + 1 + MUX_PATH_MAX];
+    if (args_len < 1 + MUX_UUID_LEN || args_len > sizeof(payload)
+        || args[0] != MUX_RESP_NEED_NODEID)
+        return 0;
+    uint_fast8_t len = 1 + MUX_UUID_LEN;
+    memcpy(payload, args, len);
+    const uint8_t *tail = &args[len];
+    uint_fast8_t tail_len = args_len - len;
+    uint_fast8_t path = 0;
+    if (tail_len && !(tail[0] & MUX_PATH_FLAG)) {
+        payload[len++] = tail[0];      // the application byte
+        tail++;
+        tail_len--;
+    }
+    if (tail_len && (tail[0] & MUX_PATH_FLAG)) {
+        uint_fast8_t count = tail[0] & ~MUX_PATH_FLAG;
+        if (count && count <= MUX_PATH_MAX && tail_len == 1 + count) {
+            memcpy(&payload[len], tail, tail_len);
+            len += tail_len;
+            path = count;
+        }
+    }
+    if (path >= MUX_PATH_MAX) {
+        // Full: the whole path goes, and this bridge's port starts a new one.
+        len -= 1 + path;
+        path = 0;
+    }
+    payload[len++] = MUX_PATH_FLAG | (path + 1);
+    payload[len++] = port;
+    return mux_kxid_unit(buf, buf_size, MUX_ADMIN_REPLY, payload, len);
+}
+
 // What a device answers an assignment request with: the same pseudo-frame back
 // (the id is in the header, so the body is the marker alone), on its own reply
 // id. The request names the device by uuid; this reply is the confirmation the

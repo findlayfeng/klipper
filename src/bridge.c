@@ -404,14 +404,53 @@ bridge_port_learn_uuid(struct bridge_port *p, int index, size_t unit_len)
     bridge_apply_pending(&kxid.args[1], index);
 }
 
+// The same answer, sent up with this port's index appended to its port path
+// (mux_need_nodeid_via): the frame is built again, so its length, CRC and
+// trailer are the new contents' own - an appended byte cannot travel in a frame
+// that still carries the old CRC.
+//
+// Answers 1 when it sent one: the answer went up in its new frame instead of the
+// one that arrived. 0 when the unit is not a NEED_NODEID answer - everything
+// else is forwarded byte for byte - or when it cannot be rebuilt, in which case
+// the original frame goes up unchanged and the device reads as one answered
+// directly.
+static int
+bridge_port_relay_nodeid(struct bridge_port *p, int index, size_t unit_len)
+{
+    struct mux_kxid kxid;
+    if (unit_len < MUX_HEADER_BYTES + MESSAGE_MIN)
+        return 0;
+    if (!mux_parse_kxid(&p->in[MUX_HEADER_BYTES], unit_len - MUX_HEADER_BYTES
+                        , &kxid))
+        return 0;
+    if (kxid.args_len < 1 + MUX_UUID_LEN
+        || kxid.args[0] != MUX_RESP_NEED_NODEID)
+        return 0;
+    uint8_t unit[MUX_HEADER_BYTES + MESSAGE_MAX];
+    uint_fast8_t len = mux_need_nodeid_via(unit, sizeof(unit), kxid.args
+                                           , kxid.args_len, index);
+    if (!len)
+        return 0;
+    mux_send(unit, len);
+    return 1;
+}
+
 // One headed unit arrived whole. Report it upward one at a time and unchanged:
 // the host does the matching and deduplication, so the bridge merges nothing.
+//
+// The one unit that does change is a NEED_NODEID answer: the bridge appends its
+// port index to the answer's port path before it goes up
+// (bridge_port_relay_nodeid), which is the only record of where a device sits
+// once the host reads the answer at the top of the chain.
 static void
 bridge_port_unit_up(struct bridge_port *p, int index, uint32_t arb
                     , size_t unit_len)
 {
-    if (arb == MUX_ADMIN_REPLY)
+    if (arb == MUX_ADMIN_REPLY) {
         bridge_port_learn_uuid(p, index, unit_len);
+        if (bridge_port_relay_nodeid(p, index, unit_len))
+            return;
+    }
     mux_send(p->in, unit_len);
 }
 
