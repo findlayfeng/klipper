@@ -34,7 +34,7 @@
 #include "board/armcm_boot.h" // armcm_enable_irq
 #include "board/irq.h" // irq_save, irq_restore
 #include "bridge.h" // bridge_port_input, struct bridge_port_ops
-#include "command.h" // DECL_CONSTANT_STR, MESSAGE_MAX
+#include "command.h" // DECL_CONSTANT, DECL_CONSTANT_STR, MESSAGE_MAX
 #include "internal.h" // enable_pclock, get_pclock_frequency, gpio_peripheral, GPIO
 #include "mux.h" // MUX_HEADER_BYTES, MUX_TUNNEL_FRAME_MAX
 #include "sched.h" // DECL_TASK, sched_wake_tasks
@@ -58,6 +58,13 @@
 // interrupt is not here: it is turned on only while a blob is queued.
 #define CR1_FLAGS (USART_CR1_UE | USART_CR1_RE | USART_CR1_TE   \
                    | USART_CR1_RXNEIE)
+
+// How many UART objects this board can give the bridge: one, because one USART
+// is wired to the port and uart_backend_open() refuses every slot but 0. The
+// count is the backend's fact - the same one it enforces - and the host reads
+// it back as BRIDGE_UART_COUNT to list the ports a bridge can be given before
+// it declares any (klipperx's `admin bridge config`).
+DECL_CONSTANT("BRIDGE_UART_COUNT", 1);
 
 // The receive and transmit buffers hold the largest things that can be in
 // flight back to back - a whole tunnel block (MUX_TUNNEL_FRAME_MAX, 128 bytes,
