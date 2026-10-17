@@ -18,10 +18,10 @@
 // task loop; a micro-controller arch would wire its serial task here instead.
 //
 // The rate and the port's wire are configuration facts, not build-time ones:
-// config_uart and config_can carry the rate and the port slot, so a rate the
-// build cannot offer, a wire it cannot open, or a second object on a slot
-// already open is reported while the host is configuring - not left behind as a
-// dead port later.
+// config_uart carries the rate and the slot whose wire it opens, config_can the
+// bitrate of this build's one CAN controller, so a rate the build cannot offer,
+// a wire it cannot open, or a second object on a slot already open is reported
+// while the host is configuring - not left behind as a dead port later.
 
 struct port_s;
 
@@ -35,15 +35,23 @@ enum port_open_result {
 
 // Open the wire behind 'p' at 'rate' on bridge port 'slot' - the slot the
 // object was created with, whose tty the host named before the device came up
-// (klipper_host_port). 'rate' is the rate the host asked for when it created
-// the object, in the units that wire counts in: the baud a USART backend is set
-// to (config_uart), or the bitrate a CAN backend sets its bus to (config_can).
-// Called once per object, when the host configures it; a slot out of the build's
-// range, or one object another already opened, is refused instead of served.
-// The result names why a failure failed; the caller reports it (shutdown()) with
-// a message of its own.
+// (klipper_host_port). 'rate' is the baud the host asked for when it created
+// the object (config_uart). The slot selects the wire among the ones this build
+// offers of one kind - the USART slots, or the host library's tty - so it is a
+// UART port's call only: a CAN port has one controller and no slot to choose
+// (port_backend_can_open). Called once per object, when the host configures it;
+// a slot out of the build's range, or one object another already opened, is
+// refused instead of served. The result names why a failure failed; the caller
+// reports it (shutdown()) with a message of its own.
 enum port_open_result port_backend_open(struct port_s *p, uint32_t rate,
                                         int slot);
+
+// Open the wire behind 'p' at 'bitrate' for a CAN port (config_can). This build
+// offers at most one CAN controller to the bridge, so there is nothing to pick:
+// the slot config_can still carries on the wire is not passed here and plays no
+// part in which wire opens. Same contract otherwise as port_backend_open(),
+// which the UART port keeps using.
+enum port_open_result port_backend_can_open(struct port_s *p, uint32_t bitrate);
 
 #if CONFIG_BRIDGE
 // The router's ops for 'p' as a downstream port: write() queues a whole blob on
