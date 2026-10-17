@@ -94,14 +94,14 @@ size_t got = klipper_host_output_wait(buf, sizeof(buf), 100);
 
 架构只回答"桥的是哪个端口"：host 没有固定端口表，所以是**路径字符串**（默认
 `/dev/ttyACM0`）；微控制器将来照自己给控制台选 UART 的做法给一份 `choice` 备选串口
-（`AVR_SERIAL_UART*` / `STM32_SERIAL_USART*` 那种）。`MUX_CAN`（CAN 也是载体的一个，已落地，见上表）与 `BRIDGE_PORT_CAN`（片上的 CAN 当下游**端口**，需端口后端）不属同一件事：后者尚缺，随 CAN 端口后端一起落地。
+（`AVR_SERIAL_UART*` / `STM32_SERIAL_USART*` 那种）。`MUX_CAN`（CAN 也是载体的一个，已落地，见上表）与 `BRIDGE_PORT_CAN`（片上的 CAN 当下游**端口**）不属同一件事：后者已随 CAN 端口后端落地（`generic/bridge_can.c`），而它**不是**本机的 CAN 节点——端口型 build 里 `CANBUS` 保持 n，驱动由 `BRIDGE_PORT_CAN` 的 Makefile 行拉入。
 
 已经实现的是**整条链路**——打开端口、把端口接进控制台、按 id 路由：
 
-- **端口在配置期由主机声明**：主机发 `config_uart oid=%c baud=%u slot=%c`（开端口并置 raw 8N1，
-  **参数来自命令**；`slot` 就是要用哪个端口槽）与 `config_bridge_port oid=%c uart=%c`（把该 UART
-  对象接成桥的一个端口，**端口 `index` = 声明顺序**，也就是 `config_uart` 里那个 `slot`——
-  **一处计数**）。`klipper_host_init()` 只初始化库，**不再打开 tty、也不再因它失败**。
+- **端口在配置期由主机声明**：主机发 `config_uart oid=%c baud=%u slot=%c`（开 UART 端口并置 raw 8N1，
+  **参数来自命令**；`slot` 就是要用哪个端口槽）或 `config_can oid=%c bitrate=%u slot=%c`（开 CAN 端口，
+  `bitrate` 是这个端口那段 CAN 总线的速率，运行期给），再发 `config_bridge_port oid=%c port=%c`（把该端口
+  对象接成桥的一个端口，**端口 `index` = 声明顺序**，也就是 `config_*.slot`——**一处计数**）。`klipper_host_init()` 只初始化库，**不再打开 tty、也不再因它失败**。
 - **tty 路径由主机在 `init` 前按端口槽登记**：`klipper_host_port(slot, path)`（`klipper_host_init()`
   之前调用，最多 `KLIPPER_HOST_PORT_SLOTS` 个槽）。某个槽没被登记时回落
   `CONFIG_HOST_BRIDGE_SERIAL_PATH`（那现在是**兜底默认**，不再是唯一事实）。
@@ -194,13 +194,14 @@ make test     # 自检：缓冲区边界（burst.c）
 - `timer.c`   – 基于 `clock_gettime(CLOCK_MONOTONIC)` 的时钟与
   irq 模拟；`timer_dispatch_many()` 等来自 `generic/timer_irq.c`。
 - `mux.c` – 也是公共的：单元格式与设备半（上面「桥模式」一节）
-- `bridge.c`  – host 的 **UART 后端**（`CONFIG_UART` + `CONFIG_BRIDGE`）：`uart_backend_open()`
+- `bridge.c`  – host 的 **UART 后端**（`CONFIG_UART` + `CONFIG_BRIDGE`）：`port_backend_open()`
   在**配置期**打开该端口槽的 tty——槽到路径的映射来自主机（`klipper_host_port`），没登记就回落
   `CONFIG_HOST_BRIDGE_SERIAL_PATH`——置 raw 8N1（速率经 `termios2`/`BOTHER`，来自 `config_uart`
   的 `baud`）、持有 fd 并把它作为桥端口交给 `config_bridge_port`；默认不参与构建。设备身份由
   **主机指派**（`klipper_host_set_uuid`，不走路径派生）。本后端**按端口槽各开一路流**（≤
-  `KLIPPER_HOST_PORT_SLOTS`，每槽独立 fd、整帧发送队列与 reset 状态机），**同槽**第二个 UART
-  对象才被拒（`UART_OPEN_BUSY`）；slot 越界显式拒绝（不走路径回落）。
-- `uart.c`   – 公共的**配置期 UART 对象**（`config_uart`/`config_bridge_port`）；后端 seam
-  `uart_backend_open`/`uart_backend_port_ops`/`uart_backend_set_port`，失败一律 `shutdown()`。
+  `KLIPPER_HOST_PORT_SLOTS`，每槽独立 fd、整帧发送队列与 reset 状态机），**同槽**第二个端口
+  对象才被拒（`PORT_OPEN_BUSY`）；slot 越界显式拒绝（不走路径回落）。
+- `port.c`   – 公共的**配置期端口对象**（`config_uart` / `config_can` / `config_bridge_port`）；后端 seam
+  `port_backend_open`/`port_backend_port_ops`/`port_backend_set_port`（`rate` 对 UART 是 baud、
+  对 CAN 是 bitrate），失败一律 `shutdown()`。
 - `klipper_host.h` / `internal.h` – 公开 API / 内部接口。
