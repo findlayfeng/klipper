@@ -6,11 +6,12 @@
 #include "port.h" // struct port_s, enum port_open_result
 
 // The seam src/port.c names (port.h) belongs to the dispatcher: bridge_port.c
-// defines port_backend_open(), port_backend_port_ops() and
-// port_backend_set_port(), and no backend does. A backend offers its ports
-// through the calls below, and the dispatcher decides which backend a slot
-// belongs to - the USART slots first, 0..bridge_serial_slot_count()-1, in the
-// order the backend's own table numbers them.
+// defines port_backend_open(), port_backend_can_open(), port_backend_port_ops()
+// and port_backend_set_port(), and no backend does. A backend offers its ports
+// through the calls below, and the dispatcher decides which USART a slot
+// belongs to - the USART slots are 0..bridge_serial_slot_count()-1, in the
+// order the backend's own table numbers them. A CAN port names no slot;
+// bridge_can.h (generic/bridge_can.h) is its half of the seam.
 
 // How many UART slots this build's USART backend offers: the size of
 // bridge_serial.c's table, which is written in slot order.

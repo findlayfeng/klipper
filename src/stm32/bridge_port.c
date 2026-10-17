@@ -3,19 +3,19 @@
 // A bridge build's ports are not all drawn from the same kind of wire. This arch
 // hands USARTs to the bridge (bridge_serial.c, CONFIG_BRIDGE_PORT_SERIAL), and
 // CAN interfaces follow (bridge_can.c, CONFIG_BRIDGE_PORT_CAN). src/port.c names
-// one seam for all of them - port_backend_open(), port_backend_port_ops(),
-// port_backend_set_port() (port.h) - so this file is where that seam is
-// answered, and this file alone defines the three symbols: each call names a
-// port slot, and the slot decides which backend serves it.
+// one seam for all of them - port_backend_open(), port_backend_can_open(),
+// port_backend_port_ops(), port_backend_set_port() (port.h) - so this file is
+// where that seam is answered, and this file alone defines those symbols.
 //
-// The slot numbering is the contract the host reads back. The UART slots come
-// first - 0..bridge_serial_slot_count()-1, in bridge_serial.c's table order -
-// and the other backends' slots follow, each numbered from zero among its own
-// kind. So a slot is a port, not a USART, and BRIDGE_UART_COUNT is what the host
-// lists the ports with before it declares any (klipperx's `admin bridge
-// config`): the number of port slots this build can give the bridge - the UART
-// slots plus the others, not a count of USARTs. The name is the one the host has
-// always read, so it stays.
+// Only the UART call names a port slot, and only USARTs are numbered by one:
+// the UART slots are 0..bridge_serial_slot_count()-1, in bridge_serial.c's table
+// order, and a slot outside that range names no wire. A CAN port names no slot
+// at all - one CAN controller is all this build gives the bridge - so it comes
+// in through port_backend_can_open() and the slot the host still sends is
+// ignored. BRIDGE_UART_COUNT stays the number of port slots the host lists the
+// ports with before it declares any (klipperx's `admin bridge
+// config`): the UART slots plus the one CAN port, not a count of USARTs. The
+// name is the one the host has always read, so it stays.
 //
 // Copyright (C) 2026  Feng Cheng <i@pfeng.top>
 //
@@ -27,46 +27,59 @@
 #include "port.h" // port_backend_*, enum port_open_result
 
 // The CAN backend's half of the seam (bridge_can.c, CONFIG_BRIDGE_PORT_CAN):
-// generic/bridge_can.h declares what this file calls - opening its slot, the
+// generic/bridge_can.h declares what this file calls - opening the port, the
 // ops of the object that opened it, and the port index it feeds bytes under.
-// One CAN controller is one slot: the first slot left over after the UART slots
-// is CAN slot 0, and this build's CAN backend offers no other.
+// One CAN controller is one port and carries no slot number.
 #if CONFIG_BRIDGE_PORT_CAN
 #include "generic/bridge_can.h" // bridge_can_open, bridge_can_owns
-#define BRIDGE_CAN_SLOT_COUNT 1
-#else
-#define BRIDGE_CAN_SLOT_COUNT 0
 #endif
 
-// Every port slot this build can give the bridge. The UART part is a
-// preprocessor sum of the options bridge_serial.c's table is built from
-// (bridge_port.h), not bridge_serial_slot_count(): the value goes into a
-// compile_time_request, which only folds constant expressions.
-#define BRIDGE_UART_COUNT (BRIDGE_SERIAL_SLOT_COUNT + BRIDGE_CAN_SLOT_COUNT)
+// Every port this build can give the bridge. The UART part is a preprocessor
+// sum of the options bridge_serial.c's table is built from (bridge_port.h), not
+// bridge_serial_slot_count(): the value goes into a compile_time_request, which
+// only folds constant expressions. The CAN port is one more, without a slot.
+#if CONFIG_BRIDGE_PORT_CAN
+#define BRIDGE_CAN_PORT_COUNT 1
+#else
+#define BRIDGE_CAN_PORT_COUNT 0
+#endif
+#define BRIDGE_UART_COUNT (BRIDGE_SERIAL_SLOT_COUNT + BRIDGE_CAN_PORT_COUNT)
 DECL_CONSTANT("BRIDGE_UART_COUNT", BRIDGE_UART_COUNT);
 
-// Open the port behind 'slot'. Called once per port object, from config_uart
-// (src/port.c), so a slot this build does not offer, or a rate the backend
-// cannot set, fails the host's configuration with its own message instead of
-// leaving a port that never speaks.
+// Open the USART behind 'slot'. Called once per UART port object, from
+// config_uart (src/port.c), so a slot this build does not offer, or a rate the
+// backend cannot set, fails the host's configuration with its own message
+// instead of leaving a port that never speaks. The slot is the UART one and
+// nothing else: a slot no USART covers names no wire.
 enum port_open_result
 port_backend_open(struct port_s *p, uint32_t rate, int slot)
 {
-    int can_slot = slot;
 #if CONFIG_BRIDGE_PORT_SERIAL
-    // The UART slots first, in the order bridge_serial.c numbers them.
+    // The UART slots, in the order bridge_serial.c numbers them.
     if (slot >= 0 && slot < bridge_serial_slot_count())
         return bridge_serial_open(p, rate, slot);
-    // Then the CAN slots, counted from zero after the UART slots.
-    can_slot = slot - bridge_serial_slot_count();
-#endif
-#if CONFIG_BRIDGE_PORT_CAN
-    if (can_slot == 0)
-        return bridge_can_open(p, rate);
 #else
-    (void)can_slot;
+    (void)p;
+    (void)rate;
+    (void)slot;
 #endif
     return PORT_OPEN_NO_DEVICE;
+}
+
+// Open this build's CAN controller for 'p'. Called once per CAN port object,
+// from config_can (src/port.c), and there is nothing to pick: this build gives
+// the bridge one CAN controller, so no slot is taken here and the one the host
+// still sends on the wire is ignored.
+enum port_open_result
+port_backend_can_open(struct port_s *p, uint32_t bitrate)
+{
+#if CONFIG_BRIDGE_PORT_CAN
+    return bridge_can_open(p, bitrate);
+#else
+    (void)p;
+    (void)bitrate;
+    return PORT_OPEN_NO_DEVICE;
+#endif
 }
 
 #if CONFIG_BRIDGE

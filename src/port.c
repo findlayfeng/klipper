@@ -66,18 +66,21 @@ command_config_uart(uint32_t *args)
 }
 DECL_COMMAND(command_config_uart, "config_uart oid=%c baud=%u slot=%c");
 
-// Create a CAN port object at the bitrate the host asks for, on the bridge port
-// (the "slot" on the wire) the object belongs to. The same shape as the UART
-// command above, because it is the same object - only the rate is a bus bitrate
-// instead of a line baud, and the messages say so: a rate a CAN controller
-// cannot be set to is not a baud the host could lower, it is the rate the bus it
-// is on runs at.
+// Create a CAN port object at the bitrate the host asks for. The same object as
+// the UART command above - only the rate is a bus bitrate instead of a line
+// baud, and the messages say so: a rate a CAN controller cannot be set to is
+// not a baud the host could lower, it is the rate the bus it is on runs at.
+//
+// The wire is not picked here: this build offers one CAN controller to the
+// bridge, so which slot config_can names on the wire cannot change what opens.
+// The trailing slot argument is still on the wire (the host sends the port's
+// index for now) and this command ignores it - the UART slot numbering is what
+// port_backend_open() resolves, and a CAN port is not part of it.
 void
 command_config_can(uint32_t *args)
 {
     uint8_t oid = args[0];
     uint32_t bitrate = args[1];
-    int slot = args[2];
     // A CAN port is a port object like the UART one, so both commands allocate
     // it under config_uart's tag - the way config_spi_without_cs uses
     // config_spi's (src/spicmds.c). config_bridge_port looks an oid up by that
@@ -88,18 +91,22 @@ command_config_can(uint32_t *args)
     p->ctx = NULL;
     if (!bitrate)
         shutdown("config_can: bitrate must be nonzero");
-    switch (port_backend_open(p, bitrate, slot)) {
+#if CONFIG_BRIDGE_PORT_CAN
+    switch (port_backend_can_open(p, bitrate)) {
     case PORT_OPEN_OK:
         break;
     case PORT_OPEN_BAD_BAUD:
         shutdown("config_can: the CAN port cannot be set to the requested"
                  " bitrate");
     case PORT_OPEN_BUSY:
-        shutdown("config_can: the port slot is already in use");
+        shutdown("config_can: the CAN port is already in use");
     case PORT_OPEN_NO_DEVICE:
     default:
         shutdown("config_can: the CAN controller could not be opened");
     }
+#else
+    shutdown("config_can: this build has no CAN downstream port");
+#endif
 }
 DECL_COMMAND(command_config_can, "config_can oid=%c bitrate=%u slot=%c");
 
