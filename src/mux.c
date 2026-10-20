@@ -19,6 +19,35 @@
 #include "mux.h" // the mux unit format
 #include "sched.h" // shutdown
 
+// TODO(ring): the input path still runs through the carrier's linear buffer -
+// mux_input() compacts the front of it and the frame parser reads a buffer
+// head. Feeding the console's bytes straight into a ring, and handing the
+// parser a (ptr, len) inside it, is the next step, and these are the
+// constraints that make it a redesign rather than a different buffer:
+//
+//  - USB cannot be handed a short contiguous run: btable_read_packet()
+//    (stm32/usbfs.c:130-136) clamps the copy to max_len and then releases the
+//    packet (usbfs.c:228-229), so a run shorter than USB_CDC_EP_BULK_OUT_SIZE
+//    silently loses the rest of the packet - corruption of the byte stream, not
+//    backpressure. generic/usb_cdc.c:159 lives with that by reading only so
+//    long as the linear tail holds a whole packet; a ring has to reclaim the
+//    wrap before it reads, never read across it.
+//  - A raw frame is not a unit. mux_input() hands an unheaded frame straight to
+//    the parser, so the "one maximum unit" hole that keeps a *unit* contiguous
+//    does not bound it: a raw frame (up to MESSAGE_MAX) can straddle the wrap
+//    too. The UART producer is a per-byte interrupt (generic/serial_irq.c:28)
+//    and cannot decline to cross a boundary it does not know, so the hole would
+//    have to be known to the reader (state in the ring, or a marker) instead of
+//    inferred from the bytes.
+//  - The critical section may not grow. generic/serial_irq.c:110-116 already
+//    masks interrupts across mux_input()'s moves, and tidying up at the wrap is
+//    a bounded memmove that needs the producer quiesced the same way.
+//
+// What those point at is "wrap only once the ring is drained, tidy up lazily":
+// frames and units then always start at the read offset and are always
+// contiguous, no marker bytes are needed, and the one move happens at a wrap
+// instead of after every unit.
+
 // The header is a shortened Hamming code: ten data bits and four check bits
 // over fourteen positions, the parity positions being the powers of two and the
 // data bits sitting in every other position. Position 15 - the one a full
@@ -605,10 +634,21 @@ mux_unit_len(uint8_t *buf, size_t len, uint32_t *arb, uint_fast8_t *consumed)
 //
 // The units are read where they lie: `start` is how many bytes of the front the
 // call has already accounted for (units handled, junk dropped), so each unit is
-// parsed at &buf[start] and never moves the bytes behind it. The buffer is
-// compacted once per call - at the end, over the bytes consumed - so resolving
-// N units of a buffer costs one pass over the bytes instead of one pass per
-// unit.
+// parsed at &buf[start] and never moves the bytes behind it.
+//
+// What a call moves, in bytes: one memmove at most, over at most the length the
+// call was handed (*len) - the compaction of what is left over at the end, or,
+// when the call ends on a unit of ours, the single move that takes that unit's
+// frame and the tail behind it down to the front. The frame itself is copied
+// once there, and no intermediate buffer holds it. A unit that is junk or not
+// ours moves nothing at all: it is only counted in `start`.
+//
+// That is what takes the quadratic term out of a busy wire. Dropping a unit
+// used to move every byte behind it, so resolving N units that arrive together
+// cost ~N/2 buffer lengths - O(N^2) in the bytes buffered. Now the same burst
+// costs one pass over the buffer, O(N): one move of the unconsumed remainder,
+// and one copy of a frame plus its tail in the same move when the call ends on
+// a unit of ours.
 int
 mux_input(uint8_t *buf, size_t *len)
 {
