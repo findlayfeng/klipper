@@ -589,107 +589,147 @@ mux_tunnel_frame_len(uint8_t word_cnt)
     return frame_len;
 }
 
-// The unit at the front of the buffer, or 0 when it has not arrived whole.
-static size_t
-mux_unit_len(uint8_t *buf, size_t len, uint32_t *arb, uint_fast8_t *consumed)
+// The head at the front of the buffer, and what follows it.
+//
+// A stream carries two kinds of item and the first byte says which. With 0x80
+// set it is a unit: its head is the two-byte unit header and the frame behind
+// it is one this device may be addressed by. With 0x80 clear it is a raw
+// klipper frame - what a path with one device on it, and the wire format that
+// predates the mux, carries - and it has no head at all: its first byte is the
+// length the frame parser will read. Answering both in the same pair (how much
+// of the front is head, how much behind it is frame) is what lets one loop
+// resolve either; the framing bit is the only thing told apart here, and it has
+// to stay that way - read as headed, a raw frame is a bad header at every unit
+// boundary and would be dropped a byte at a time.
+struct mux_head {
+    uint32_t arb;           // the id a unit addresses (no id for a raw frame)
+    uint_fast8_t consumed;  // MUX_HEADER_BYTES, or 0 when there is no head
+    size_t frame_len;       // what follows the head; 0 where the head is junk
+};
+
+// What reading the head found. `head` is meaningful for JUNK (drop its
+// consumed bytes, there is no frame) and UNIT (consumed + frame_len bytes).
+enum mux_head_scan {
+    MUX_HEAD_PARTIAL,       // the buffer ends inside the head or the item
+    MUX_HEAD_JUNK,          // the head alone is junk: drop it and rescan
+    MUX_HEAD_RAW,           // a raw frame: the parser owns the bytes behind it
+    MUX_HEAD_UNIT,          // a whole unit of frame_len bytes behind its head
+};
+
+static enum mux_head_scan
+mux_head_scan(uint8_t *buf, size_t len, struct mux_head *head)
 {
+    if (!(buf[0] & 0x80)) {
+        // No header: an ordinary frame, and the parser owns it. Nothing here
+        // may hold it back - not even a length byte this loop would call too
+        // short or too long, because the parser judges that itself and a frame
+        // dropped here would be resynchronised by a rule it does not share.
+        head->consumed = 0;
+        head->frame_len = buf[0];
+        return MUX_HEAD_RAW;
+    }
     if (len < MUX_HEADER_BYTES)
-        return 0;
-    if (mux_decode_header(buf, MUX_HEADER_BYTES, arb, consumed)
-        != MUX_HEADER_COMPLETE)
+        return MUX_HEAD_PARTIAL;
+    if (mux_decode_header(buf, MUX_HEADER_BYTES, &head->arb, &head->consumed)
+        != MUX_HEADER_COMPLETE) {
         // A byte with the framing bit set that is not a header: no frame starts
         // that way either, so it is dropped and the parse resynchronises on the
         // next byte - the same policy the frame parser applies to a block it
         // cannot read.
-        return 1;
-    if (len < (size_t)*consumed + 1)
-        return 0;                     // the length byte is still coming
-    if (buf[*consumed] == MUX_TUNNEL_TAG0) {
+        head->consumed = 1;
+        head->frame_len = 0;
+        return MUX_HEAD_JUNK;
+    }
+    if (len < (size_t)head->consumed + 1)
+        return MUX_HEAD_PARTIAL;      // the length byte is still coming
+    if (buf[head->consumed] == MUX_TUNNEL_TAG0) {
         // A tunnel unit opens with two tag bytes: until the second arrives, a
         // tunnel frame and junk that merely starts with 0x01 cannot be told
         // apart, so a lone 0x01 waits - the host reader waits the same way.
-        if (len < (size_t)*consumed + 2)
-            return 0;                 // the second tag byte is still coming
-        if (buf[*consumed + 1] != MUX_TUNNEL_TAG1)
-            return *consumed;         // 0x01 is no klipper length either: junk
-        if (len < (size_t)*consumed + MUX_TUNNEL_POS_WORDCNT + 1)
-            return 0;                 // the word count is still coming
+        if (len < (size_t)head->consumed + 2)
+            return MUX_HEAD_PARTIAL;  // the second tag byte is still coming
+        if (buf[head->consumed + 1] != MUX_TUNNEL_TAG1) {
+            head->frame_len = 0;      // 0x01 is no klipper length either: junk
+            return MUX_HEAD_JUNK;
+        }
+        if (len < (size_t)head->consumed + MUX_TUNNEL_POS_WORDCNT + 1)
+            return MUX_HEAD_PARTIAL;  // the word count is still coming
         size_t frame_len = mux_tunnel_frame_len(
-            buf[*consumed + MUX_TUNNEL_POS_WORDCNT]);
-        if (!frame_len)
-            return *consumed;         // a word count past 128: junk
-        if (len < (size_t)*consumed + frame_len)
-            return 0;                 // the frame is still arriving
-        return (size_t)*consumed + frame_len;
+            buf[head->consumed + MUX_TUNNEL_POS_WORDCNT]);
+        if (!frame_len) {
+            head->frame_len = 0;      // a word count past 128: junk
+            return MUX_HEAD_JUNK;
+        }
+        if (len < (size_t)head->consumed + frame_len)
+            return MUX_HEAD_PARTIAL;  // the frame is still arriving
+        head->frame_len = frame_len;
+        return MUX_HEAD_UNIT;
     }
-    uint_fast8_t msglen = buf[*consumed];
-    if (msglen < MESSAGE_MIN || msglen > MESSAGE_MAX)
-        return *consumed;             // a length no frame has: drop the header
-    if (len < (size_t)*consumed + msglen)
-        return 0;                     // the frame is still arriving
-    return (size_t)*consumed + msglen;
+    uint_fast8_t msglen = buf[head->consumed];
+    if (msglen < MESSAGE_MIN || msglen > MESSAGE_MAX) {
+        head->frame_len = 0;          // a length no frame has: drop the header
+        return MUX_HEAD_JUNK;
+    }
+    if (len < (size_t)head->consumed + msglen)
+        return MUX_HEAD_PARTIAL;      // the frame is still arriving
+    head->frame_len = msglen;
+    return MUX_HEAD_UNIT;
 }
 
-// Resolve the units at the front of the buffer, in place.
+// Resolve the items at the front of the buffer, in place.
 //
-// The units are read where they lie: `start` is how many bytes of the front the
-// call has already accounted for (units handled, junk dropped), so each unit is
-// parsed at &buf[start] and never moves the bytes behind it.
+// The items are read where they lie: `start` is how many bytes of the front the
+// call has already accounted for (units handled, junk dropped), so each one is
+// read at &buf[start] and never moves the bytes behind it. A unit and a raw
+// frame go through the same two steps - what the head takes (mux_head_scan) and
+// what this device does with the frame behind it - so there is one place a
+// header comes off and one place the stream advances.
 //
 // What a call moves, in bytes: one memmove at most, over at most the length the
-// call was handed (*len) - the compaction of what is left over at the end, or,
-// when the call ends on a unit of ours, the single move that takes that unit's
-// frame and the tail behind it down to the front. The frame itself is copied
-// once there, and no intermediate buffer holds it. A unit that is junk or not
-// ours moves nothing at all: it is only counted in `start`.
+// call was handed (*len) - the frame it ends on, taken down over its head and
+// over the junk and other devices' units in front of it, the tail following it
+// so that it stays contiguous. The frame is copied once there, and no
+// intermediate buffer holds it. A raw frame comes through that same move with
+// no head to take off, so it lands at the front untouched and the parser reads
+// it where it was. Everything else moves nothing at all: junk and a unit
+// another device owns are only counted in `start`.
 //
 // That is what takes the quadratic term out of a busy wire. Dropping a unit
 // used to move every byte behind it, so resolving N units that arrive together
 // cost ~N/2 buffer lengths - O(N^2) in the bytes buffered. Now the same burst
 // costs one pass over the buffer, O(N): one move of the unconsumed remainder,
 // and one copy of a frame plus its tail in the same move when the call ends on
-// a unit of ours.
+// a frame of ours.
 int
 mux_input(uint8_t *buf, size_t *len)
 {
     size_t start = 0;
-    int ready = 0;
     for (;;) {
         size_t avail = *len - start;
         if (!avail)
             break;                    // nothing left: no frame to hand over
-        if (!(buf[start] & 0x80)) {
-            // No header: an ordinary frame, which is what an exclusive path (and
-            // the old wire format) carries. The parser owns it.
-            ready = 1;
-            break;
-        }
-
-        uint32_t arb;
-        uint_fast8_t consumed;
-        size_t unit_len = mux_unit_len(&buf[start], avail, &arb, &consumed);
-        if (!unit_len)
-            break;                    // a unit is on its way: do not parse it
-        if (unit_len == 1 || unit_len == consumed) {
-            // Junk instead of a unit: drop what cannot be a unit and look again.
-            start += unit_len;
+        struct mux_head head;
+        enum mux_head_scan scan = mux_head_scan(&buf[start], avail, &head);
+        if (scan == MUX_HEAD_PARTIAL)
+            break;        // an item is on its way: handing it over would lose it
+        // What the parser gets: a raw frame whole, or a unit addressed to this
+        // device. Junk and another device's unit (routed or dropped inside
+        // mux_unit) are neither, and never reach mux_unit().
+        int to_parser = scan == MUX_HEAD_RAW
+            || (scan == MUX_HEAD_UNIT
+                && mux_unit(head.arb, &buf[start + head.consumed]
+                            , head.frame_len) == MUX_UNIT_OURS);
+        if (!to_parser) {
+            // Clear the item without moving it: junk drops its head alone
+            // (frame_len 0), a unit of another device's all of itself.
+            start += head.consumed + head.frame_len;
             continue;
         }
-
-        uint_fast8_t msglen = unit_len - consumed;
-        if (mux_unit(arb, &buf[start + consumed], msglen) == MUX_UNIT_OURS) {
-            // Ours: the frame goes to the parser, its header gone. One move
-            // takes the frame - and whatever followed the unit, which keeps the
-            // tail contiguous behind it - down over the header and over the
-            // bytes this call already consumed. The frame is copied once and
-            // needs no intermediate buffer.
-            memmove(buf, &buf[start + consumed], *len - start - consumed);
-            *len -= start + consumed;
-            return 1;
-        }
-        start += unit_len;
+        memmove(buf, &buf[start + head.consumed], *len - start - head.consumed);
+        *len -= start + head.consumed;
+        return 1;
     }
     memmove(buf, &buf[start], *len - start);
     *len -= start;
-    return ready;
+    return 0;
 }
