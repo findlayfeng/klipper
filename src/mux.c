@@ -601,42 +601,55 @@ mux_unit_len(uint8_t *buf, size_t len, uint32_t *arb, uint_fast8_t *consumed)
     return (size_t)*consumed + msglen;
 }
 
+// Resolve the units at the front of the buffer, in place.
+//
+// The units are read where they lie: `start` is how many bytes of the front the
+// call has already accounted for (units handled, junk dropped), so each unit is
+// parsed at &buf[start] and never moves the bytes behind it. The buffer is
+// compacted once per call - at the end, over the bytes consumed - so resolving
+// N units of a buffer costs one pass over the bytes instead of one pass per
+// unit.
 int
 mux_input(uint8_t *buf, size_t *len)
 {
+    size_t start = 0;
+    int ready = 0;
     for (;;) {
-        if (!*len)
-            return 0;
-        if (!(buf[0] & 0x80))
+        size_t avail = *len - start;
+        if (!avail)
+            break;                    // nothing left: no frame to hand over
+        if (!(buf[start] & 0x80)) {
             // No header: an ordinary frame, which is what an exclusive path (and
             // the old wire format) carries. The parser owns it.
-            return 1;
+            ready = 1;
+            break;
+        }
 
         uint32_t arb;
         uint_fast8_t consumed;
-        size_t unit_len = mux_unit_len(buf, *len, &arb, &consumed);
+        size_t unit_len = mux_unit_len(&buf[start], avail, &arb, &consumed);
         if (!unit_len)
-            return 0;                 // a unit is on its way: do not parse it
+            break;                    // a unit is on its way: do not parse it
         if (unit_len == 1 || unit_len == consumed) {
             // Junk instead of a unit: drop what cannot be a unit and look again.
-            memmove(buf, &buf[unit_len], *len - unit_len);
-            *len -= unit_len;
+            start += unit_len;
             continue;
         }
 
         uint_fast8_t msglen = unit_len - consumed;
-        uint8_t held[MESSAGE_MAX];
-        if (mux_unit(arb, &buf[consumed], msglen) == MUX_UNIT_OURS) {
-            // Ours: the frame goes to the parser, its header gone. It is lifted
-            // through a local copy because the tail moves down over where it is.
-            memcpy(held, &buf[consumed], msglen);
-            size_t tail = *len - unit_len;
-            memmove(&buf[msglen], &buf[unit_len], tail);
-            memcpy(buf, held, msglen);
-            *len -= consumed;
+        if (mux_unit(arb, &buf[start + consumed], msglen) == MUX_UNIT_OURS) {
+            // Ours: the frame goes to the parser, its header gone. One move
+            // takes the frame - and whatever followed the unit, which keeps the
+            // tail contiguous behind it - down over the header and over the
+            // bytes this call already consumed. The frame is copied once and
+            // needs no intermediate buffer.
+            memmove(buf, &buf[start + consumed], *len - start - consumed);
+            *len -= start + consumed;
             return 1;
         }
-        memmove(buf, &buf[unit_len], *len - unit_len);
-        *len -= unit_len;
+        start += unit_len;
     }
+    memmove(buf, &buf[start], *len - start);
+    *len -= start;
+    return ready;
 }
