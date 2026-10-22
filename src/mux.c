@@ -401,6 +401,22 @@ mux_assignment_reply(uint8_t *buf, uint_fast8_t buf_size, uint32_t nodeid)
 static uint8_t mux_identity[MUX_UUID_LEN];
 static uint32_t mux_assigned;
 
+#if CONFIG_MUX && !CONFIG_MUX_CAN
+// The identity question, answered the way a CAN node answers it
+// (`generic/canserial.c`): this device's six-byte uuid and the node id it has
+// adopted. Same command name, same reply, so one host code path covers every
+// id-addressed device - and the old name stays declared as an alias for hosts
+// that predate the rename.
+void
+command_get_mcu_id(uint32_t *args)
+{
+    sendf("canbus_id canbus_uuid=%.*s canbus_nodeid=%u"
+          , MUX_UUID_LEN, mux_uuid(), mux_node_id());
+}
+DECL_COMMAND_FLAGS(command_get_mcu_id, HF_IN_SHUTDOWN, "get_mcu_id");
+DECL_COMMAND_FLAGS(command_get_mcu_id, HF_IN_SHUTDOWN, "get_canbus_id");
+#endif // CONFIG_MUX && !CONFIG_MUX_CAN
+
 void
 mux_set_uuid(const uint8_t *uuid)
 {

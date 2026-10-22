@@ -454,12 +454,18 @@ DECL_COMMAND_FLAGS(command_get_canbus_status, HF_IN_SHUTDOWN
                    , "get_canbus_status");
 
 void
-command_get_canbus_id(uint32_t *args)
+command_get_mcu_id(uint32_t *args)
 {
     sendf("canbus_id canbus_uuid=%.*s canbus_nodeid=%u"
           , sizeof(CanData.uuid), CanData.uuid, can_get_nodeid());
 }
-DECL_COMMAND_FLAGS(command_get_canbus_id, HF_IN_SHUTDOWN, "get_canbus_id");
+// One handler, two names: `get_mcu_id` is the name the host asks for now, and
+// `get_canbus_id` stays declared so a host that predates the rename still gets
+// an answer (same command, same reply). The serial mux carriers export the same
+// command under the same name with the same reply (`mux.c`), so the host has one
+// code path for every id-addressed device.
+DECL_COMMAND_FLAGS(command_get_mcu_id, HF_IN_SHUTDOWN, "get_mcu_id");
+DECL_COMMAND_FLAGS(command_get_mcu_id, HF_IN_SHUTDOWN, "get_canbus_id");
 
 void
 canserial_set_uuid(uint8_t *raw_uuid, uint32_t raw_uuid_len)
